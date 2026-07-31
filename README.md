@@ -30,6 +30,8 @@ Because the instance is off most of the time. Something has to be able to turn i
  cron (5 min): idle-watch.sh ──▶ stops the instance after 60 idle minutes
 ```
 
+Idle is measured by hashing the tmux screen, so it also checks `~/.claude/jobs/` before shutting down: a `claude --bg` agent can work for an hour while the main pane sits perfectly still, and hashing alone would stop the box and lose that work. A job counts as running only if its state is non-terminal *and* its files were touched recently — `blocked` waits on a human, and a job stuck mid-state would otherwise pin the instance on forever.
+
 The instance starts Claude Code itself via systemd. The Lambda never reaches in to launch anything — it is a power switch and a viewport, nothing more. An earlier version did launch the session remotely over SSM, and every failure mode traced back to that one decision. See the design doc for the post-mortem.
 
 ## Commands
