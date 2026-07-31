@@ -3,6 +3,7 @@
 set -eu
 
 install -o ubuntu -g ubuntu -m 0755 /tmp/claude-supervise.sh /home/ubuntu/claude-supervise.sh
+install -o ubuntu -g ubuntu -m 0755 /tmp/start-claude-telegram.sh /home/ubuntu/start-claude-telegram.sh
 install -o root -g root -m 0644 /tmp/claude-telegram.service /etc/systemd/system/claude-telegram.service
 
 systemctl daemon-reload
