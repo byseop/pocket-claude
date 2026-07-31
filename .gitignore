@@ -1,0 +1,13 @@
+# Secrets and environment-specific identifiers — never commit
+.env
+.env.local
+
+# Lambda build artifacts
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Editor / OS
+.DS_Store
