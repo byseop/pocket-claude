@@ -81,5 +81,72 @@ class TestBuildStatus(unittest.TestCase):
         self.assertNotIn('claude-telegram.service', out)
 
 
+class TestFormatError(unittest.TestCase):
+    def test_includes_command_and_exception_text(self):
+        out = lf.format_error('/status', RuntimeError('boom'))
+        self.assertIn('/status', out)
+        self.assertIn('boom', out)
+        self.assertIn('RuntimeError', out)
+
+    def test_truncates_very_long_messages(self):
+        out = lf.format_error('/view', RuntimeError('x' * 5000))
+        self.assertLessEqual(len(out), 1200)
+
+    def test_handles_exception_with_empty_message(self):
+        out = lf.format_error('/stop', ValueError())
+        self.assertIn('ValueError', out)
+
+
+class TestHandlerRouting(unittest.TestCase):
+    """The handler must never raise: a crash means Telegram shows nothing."""
+
+    def setUp(self):
+        self.sent = []
+        self._tg = lf.tg_send
+        self._id = lf.INSTANCE_ID
+        lf.tg_send = lambda chat_id, text: self.sent.append((chat_id, text))
+        lf.INSTANCE_ID = 'i-test'
+        os.environ['ALLOWED_CHAT_ID'] = '111'
+
+    def tearDown(self):
+        lf.tg_send = self._tg
+        lf.INSTANCE_ID = self._id
+
+    @staticmethod
+    def _event(text, chat_id=111):
+        import json as _j
+        return {'body': _j.dumps({'message': {'chat': {'id': chat_id}, 'text': text}})}
+
+    def test_rejects_other_chat_ids_without_replying(self):
+        res = lf.lambda_handler(self._event('/status', chat_id=999), None)
+        self.assertEqual(res['statusCode'], 200)
+        self.assertEqual(self.sent, [])
+
+    def test_unknown_command_gets_help(self):
+        lf.lambda_handler(self._event('/nope'), None)
+        self.assertIn('/start', self.sent[0][1])
+
+    def test_plain_text_is_ignored(self):
+        lf.lambda_handler(self._event('안녕'), None)
+        self.assertEqual(self.sent, [])
+
+    def test_command_failure_is_reported_not_raised(self):
+        def boom(chat_id):
+            raise RuntimeError('describe failed')
+
+        lf.HANDLERS['/status'] = boom
+        try:
+            res = lf.lambda_handler(self._event('/status'), None)
+        finally:
+            lf.HANDLERS['/status'] = lf.cmd_status
+        self.assertEqual(res['statusCode'], 200)
+        self.assertTrue(self.sent, 'failure must be reported to Telegram')
+        self.assertIn('describe failed', self.sent[0][1])
+
+    def test_reports_even_when_body_is_malformed(self):
+        res = lf.lambda_handler({'body': 'not json'}, None)
+        self.assertEqual(res['statusCode'], 200)
+
+
 if __name__ == '__main__':
     unittest.main()

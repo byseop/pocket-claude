@@ -70,6 +70,18 @@ def format_uptime(launch_time, now):
     return f'{hours}h {minutes}m' if hours else f'{minutes}m'
 
 
+def format_error(command, exc):
+    """Render an exception for Telegram.
+
+    A crash that only reaches CloudWatch looks identical to a dead bot from
+    the phone. Surfacing the exception is what makes the difference between
+    "no reply" and a diagnosable failure.
+    """
+    detail = str(exc) or '(메시지 없음)'
+    body = f'⚠️ {command} 처리 실패\n\n{type(exc).__name__}: {detail}'
+    return body[:1200]
+
+
 def build_status(state, uptime, service_active, auth_error):
     if state != 'running':
         return f'⚪ EC2 {state}\n   /start 로 켜세요.'
@@ -230,18 +242,34 @@ def lambda_handler(event, context):
     if not INSTANCE_ID:
         return {'statusCode': 500, 'body': 'INSTANCE_ID is not configured'}
 
-    body = json.loads(event.get('body') or '{}')
-    message = body.get('message') or body.get('edited_message') or {}
-    chat_id = str((message.get('chat') or {}).get('id', ''))
-    text = (message.get('text') or '').strip().split('@')[0]
+    # Parse defensively: a malformed body must not raise, or Telegram retries
+    # the same update forever against a handler that will never accept it.
+    try:
+        body = json.loads(event.get('body') or '{}')
+        message = body.get('message') or body.get('edited_message') or {}
+        chat_id = str((message.get('chat') or {}).get('id', ''))
+        text = (message.get('text') or '').strip().split('@')[0]
+    except (ValueError, AttributeError):
+        return {'statusCode': 200, 'body': 'unparseable'}
 
     if chat_id != os.environ['ALLOWED_CHAT_ID']:
         return {'statusCode': 200, 'body': 'ignored'}
 
     handler = HANDLERS.get(text)
-    if handler:
+    if not handler:
+        if text.startswith('/'):
+            tg_send(chat_id, HELP)
+        return {'statusCode': 200, 'body': 'ok'}
+
+    # Any failure below reaches the phone. Returning 200 regardless keeps
+    # Telegram from redelivering an update we already answered.
+    try:
         handler(chat_id)
-    elif text.startswith('/'):
-        tg_send(chat_id, HELP)
+    except Exception as exc:  # noqa: BLE001 - deliberate catch-all
+        try:
+            tg_send(chat_id, format_error(text, exc))
+        except Exception:  # noqa: BLE001 - Telegram itself is down
+            pass
+        return {'statusCode': 200, 'body': 'error reported'}
 
     return {'statusCode': 200, 'body': 'ok'}
