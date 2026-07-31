@@ -11,3 +11,6 @@ __pycache__/
 
 # Editor / OS
 .DS_Store
+
+# Deployed v3 snapshot keeps the real instance ID for rollback — local only
+backup/lambda_function.v3.py

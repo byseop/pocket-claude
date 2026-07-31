@@ -1,0 +1,16 @@
+[Unit]
+Description=Claude Code Telegram channel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=HOME=/home/ubuntu
+ExecStart=/home/ubuntu/claude-supervise.sh
+ExecStop=/usr/bin/tmux kill-session -t claude
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

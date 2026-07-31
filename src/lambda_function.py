@@ -1,48 +1,92 @@
 """
-ec2-boot-manager Lambda — v3 (Slim).
+ec2-boot-manager Lambda - v4.
 
-Role: SYSTEM LAYER ONLY.
-  - EC2 lifecycle (on/off, status)
-  - Main session resurrection (restart_main)
-  - System diagnostics (auth/daemon/sessions)
-  - Help
+Power switch and viewport only. The instance starts Claude Code itself via
+systemd, so this function never launches anything remotely. Every command
+path returns without waiting on instance state: API Gateway's integration
+timeout is 30s, and v3 exceeded it by blocking on an instance_running waiter
+for 38.7s, which made Telegram retry and skip the launch entirely.
 
-Application-layer work (background agent spawn/list/cmd/stop/...)
-is handled by the MAIN claude session via the telegram MCP channel plugin
-(natural-language interaction). See ~/.claude/CLAUDE.md on the EC2 host.
-
-Endpoints kept from v1/v2:
-  /start_ec2  /stop_ec2  /status  /help
-
-New:
-  /restart_main   — kill+respawn the main tmux 'claude' session (EC2 stays on)
-  /diag           — auth + ec2 + main-session + daemon + bg-sessions summary
+Commands: /start /stop /status /view
 """
 
-import boto3
 import json
 import os
 import re
-import shlex
 import time
 import urllib.request
+from datetime import datetime, timezone
 
-# AWS_REGION is injected by the Lambda runtime; the fallback covers local runs
+import boto3
+
 AWS_REGION = os.environ.get('AWS_REGION', 'ap-northeast-2')
-
 ec2 = boto3.client('ec2', region_name=AWS_REGION)
 ssm = boto3.client('ssm', region_name=AWS_REGION)
 
-INSTANCE_ID = os.environ['INSTANCE_ID']
-CLAUDE_BIN = '/home/ubuntu/.local/bin/claude'
-JOBS_DIR = '/home/ubuntu/.claude/jobs'
-BOOT_SCRIPT = '/home/ubuntu/start-claude-telegram.sh'
-MAIN_TMUX = 'claude'
+# Read with a default so the module imports without AWS config, which the
+# unit tests rely on. The handler rejects an empty value explicitly.
+INSTANCE_ID = os.environ.get('INSTANCE_ID', '')
 
 TG_MAX = 3900
+SESSION = 'claude'
+SERVICE = 'claude-telegram'
+
+ANSI_RE = re.compile(r'\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][A-B]')
+AUTH_RE = re.compile(r'401|OAuth|Please run /login')
+
+RECOVERY = (
+    '   복구:\n'
+    '   1. SSM 접속 후 sudo -u ubuntu -i\n'
+    '   2. claude setup-token\n'
+    '   3. umask 077\n'
+    "      echo 'export CLAUDE_CODE_OAUTH_TOKEN=<토큰>' > ~/.claude/.env\n"
+    '   4. sudo systemctl restart claude-telegram'
+)
 
 
-# ─── Telegram ──────────────────────────────────────────────────────────────
+# --- pure helpers (unit tested, no AWS) ----------------------------------
+
+def strip_ansi(text):
+    """Remove ANSI escape sequences so tmux output is readable on mobile."""
+    return ANSI_RE.sub('', text)
+
+
+def detect_auth_error(pane_text):
+    """Return the most recent auth-failure line, or None if auth looks fine.
+
+    The process stays alive when the OAuth token is revoked, so liveness
+    checks cannot see this failure. It only shows up on screen.
+    """
+    for line in reversed(pane_text.splitlines()):
+        if AUTH_RE.search(line):
+            return line.strip()
+    return None
+
+
+def format_uptime(launch_time, now):
+    total = max(int((now - launch_time).total_seconds()), 0)
+    hours, rem = divmod(total, 3600)
+    minutes = rem // 60
+    return f'{hours}h {minutes}m' if hours else f'{minutes}m'
+
+
+def build_status(state, uptime, service_active, auth_error):
+    if state != 'running':
+        return f'⚪ EC2 {state}\n   /start 로 켜세요.'
+
+    lines = [f'✅ EC2 running ({uptime})']
+    lines.append(
+        f'✅ {SERVICE}.service active' if service_active
+        else f'❌ {SERVICE}.service 정지됨'
+    )
+    if auth_error:
+        lines.append(f'❌ 인증 실패\n   "{auth_error}"\n\n{RECOVERY}')
+    else:
+        lines.append('✅ 인증 OK')
+    return '\n'.join(lines)
+
+
+# --- telegram ------------------------------------------------------------
 
 def tg_send(chat_id, text):
     token = os.environ['TELEGRAM_TOKEN']
@@ -56,231 +100,148 @@ def tg_send(chat_id, text):
         urllib.request.urlopen(req, timeout=10)
 
 
-# ─── EC2 ──────────────────────────────────────────────────────────────────
+# --- aws -----------------------------------------------------------------
 
-def ec2_state():
-    desc = ec2.describe_instances(InstanceIds=[INSTANCE_ID])
-    return desc['Reservations'][0]['Instances'][0]['State']['Name']
-
-
-def ec2_public_ip():
-    desc = ec2.describe_instances(InstanceIds=[INSTANCE_ID])
-    return desc['Reservations'][0]['Instances'][0].get('PublicIpAddress')
+def describe():
+    inst = ec2.describe_instances(
+        InstanceIds=[INSTANCE_ID]
+    )['Reservations'][0]['Instances'][0]
+    return inst['State']['Name'], inst['LaunchTime']
 
 
-# ─── SSM ──────────────────────────────────────────────────────────────────
+def ssm_ready():
+    info = ssm.describe_instance_information(
+        Filters=[{'Key': 'InstanceIds', 'Values': [INSTANCE_ID]}]
+    )['InstanceInformationList']
+    return bool(info) and info[0]['PingStatus'] == 'Online'
 
-def ssm_run(commands, timeout=30, poll_interval=2):
-    cmd = ssm.send_command(
+
+def ssm_run(script, timeout=25):
+    """Run a short read-only script and return stdout.
+
+    Only used by /status and /view. Never used to launch anything: systemd
+    owns startup now. The timeout ceiling keeps us well under API Gateway's
+    30s integration limit.
+    """
+    cid = ssm.send_command(
         InstanceIds=[INSTANCE_ID],
         DocumentName='AWS-RunShellScript',
-        Parameters={
-            'commands': commands,
-            'executionTimeout': [str(timeout)],
-        },
-    )
-    cid = cmd['Command']['CommandId']
-    time.sleep(1)
-    deadline = time.time() + timeout + 10
-    last = None
+        Parameters={'commands': [script], 'executionTimeout': ['60']},
+    )['Command']['CommandId']
+
+    deadline = time.time() + timeout
     while time.time() < deadline:
+        time.sleep(1)
         try:
-            last = ssm.get_command_invocation(CommandId=cid, InstanceId=INSTANCE_ID)
-        except Exception:
-            time.sleep(poll_interval)
+            res = ssm.get_command_invocation(
+                CommandId=cid, InstanceId=INSTANCE_ID
+            )
+        except ssm.exceptions.InvocationDoesNotExist:
             continue
-        if last['Status'] in ('Success', 'Failed', 'Cancelled', 'TimedOut'):
-            return {
-                'status': last['Status'],
-                'stdout': (last.get('StandardOutputContent') or '').strip(),
-                'stderr': (last.get('StandardErrorContent') or '').strip(),
-            }
-        time.sleep(poll_interval)
-    return {
-        'status': last['Status'] if last else 'Timeout',
-        'stdout': (last.get('StandardOutputContent') or '').strip() if last else '',
-        'stderr': (last.get('StandardErrorContent') or '').strip() if last else '',
-    }
+        if res['Status'] in ('Success', 'Failed', 'TimedOut', 'Cancelled'):
+            return res.get('StandardOutputContent', '') or res.get(
+                'StandardErrorContent', ''
+            )
+    return ''
 
 
-def ubuntu_cmd(inner):
-    return f'sudo -u ubuntu bash -lc {shlex.quote(inner)}'
+# --- commands ------------------------------------------------------------
+
+def cmd_start(chat_id):
+    state, _ = describe()
+    if state == 'running':
+        tg_send(chat_id, '⚠️ 이미 켜져 있어요. /status 로 확인하세요.')
+        return
+    if state != 'stopped':
+        tg_send(chat_id, f'⚠️ 현재 상태: {state}. 잠시 후 다시 시도하세요.')
+        return
+    ec2.start_instances(InstanceIds=[INSTANCE_ID])
+    tg_send(
+        chat_id,
+        '🔄 EC2를 켰습니다. 1분쯤 뒤 대화할 수 있어요.\n'
+        '클로드는 systemd가 자동으로 띄웁니다.',
+    )
 
 
-# ─── ANSI strip ────────────────────────────────────────────────────────────
+def cmd_stop(chat_id):
+    state, _ = describe()
+    if state == 'stopped':
+        tg_send(chat_id, '⚠️ 이미 꺼져 있어요.')
+        return
+    ec2.stop_instances(InstanceIds=[INSTANCE_ID])
+    tg_send(chat_id, '🔄 EC2를 끕니다.')
 
-ANSI_RE = re.compile(
-    r'\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[()=]|[\x00-\x08\x0e-\x1f]'
+
+def cmd_status(chat_id):
+    state, launch = describe()
+    if state != 'running':
+        tg_send(chat_id, build_status(state, None, None, None))
+        return
+    if not ssm_ready():
+        tg_send(chat_id, '🔄 부팅 중 — SSM 에이전트 대기 중입니다.')
+        return
+
+    out = ssm_run(
+        f'systemctl is-active {SERVICE} || true\n'
+        f'echo "---"\n'
+        f'sudo -u ubuntu tmux capture-pane -t {SESSION} -p -S -200 2>/dev/null || true\n'
+    )
+    head, _, pane = out.partition('---')
+    uptime = format_uptime(launch, datetime.now(timezone.utc))
+    tg_send(
+        chat_id,
+        build_status(
+            state, uptime, head.strip() == 'active', detect_auth_error(pane)
+        ),
+    )
+
+
+def cmd_view(chat_id):
+    state, _ = describe()
+    if state != 'running':
+        tg_send(chat_id, f'⚪ EC2 {state} — /start 로 켜세요.')
+        return
+    if not ssm_ready():
+        tg_send(chat_id, '🔄 부팅 중 — SSM 에이전트 대기 중입니다.')
+        return
+    out = ssm_run(
+        f'sudo -u ubuntu tmux capture-pane -t {SESSION} -p 2>/dev/null || echo "(세션 없음)"'
+    )
+    tg_send(chat_id, strip_ansi(out).rstrip() or '(빈 화면)')
+
+
+HELP = (
+    'pocket-claude\n\n'
+    '/start   EC2 켜기\n'
+    '/stop    EC2 끄기\n'
+    '/status  상태 + 인증 확인\n'
+    '/view    클로드 화면 보기'
 )
 
-
-def strip_ansi(s):
-    return ANSI_RE.sub('', s or '')
-
-
-# ─── Main-session restart ─────────────────────────────────────────────────
-
-def restart_main_session():
-    inner = (
-        f'tmux kill-session -t {MAIN_TMUX} 2>/dev/null || true ; '
-        f'tmux new-session -d -s {MAIN_TMUX} {shlex.quote(BOOT_SCRIPT)} ; '
-        'sleep 2 ; tmux ls 2>&1'
-    )
-    return ssm_run([ubuntu_cmd(inner)], timeout=30)
-
-
-# ─── Diagnostics ──────────────────────────────────────────────────────────
-
-def collect_diag():
-    inner = (
-        'set +e ; '
-        'echo "===AUTH===" ; '
-        'jq -r ".claudeAiOauth | '
-        '\\"expiresAt=\\(.expiresAt) (now=\\((now*1000)|floor)) '
-        'subscription=\\(.subscriptionType)\\"" '
-        '~/.claude/.credentials.json 2>/dev/null || echo "creds: missing" ; '
-        f'{CLAUDE_BIN} auth status 2>&1 | head -8 ; '
-        'echo ; echo "===MAIN_SESSION===" ; '
-        f'tmux ls 2>&1 | head -10 ; '
-        f'echo "--- main tail ---" ; '
-        f'tmux capture-pane -t {MAIN_TMUX} -p 2>/dev/null | tail -8 || echo "(no main tmux)" ; '
-        'echo ; echo "===DAEMON===" ; '
-        f'{CLAUDE_BIN} daemon status 2>&1 | head -10 ; '
-        'echo ; echo "===BG_SESSIONS===" ; '
-        f'BG=$({CLAUDE_BIN} agents --json 2>/dev/null) ; '
-        'echo "count=$(echo $BG | jq length 2>/dev/null || echo ?)" ; '
-        f'for d in {JOBS_DIR}/*/ ; do '
-        '  id=$(basename "$d") ; '
-        '  jq -r --arg id "$id" '
-        '    "\\"[\\($id)] \\(.name // \\"?\\") · \\(.state // \\"?\\") · \\(.needs // .detail // .intent // \\"\\")\\"" '
-        '    "$d/state.json" 2>/dev/null ; '
-        'done'
-    )
-    res = ssm_run([ubuntu_cmd(inner)], timeout=30)
-    return strip_ansi(res['stdout'])
-
-
-# ─── Handler ───────────────────────────────────────────────────────────────
-
-HELP_TEXT = """🤖 EC2 Boot Manager (시스템 레이어)
-
-[EC2 라이프사이클]
-/start_ec2     EC2 시작 + 메인 세션 부트
-/stop_ec2      메인 세션 종료 + EC2 정지
-/status        EC2 상태
-
-[복구]
-/restart_main  메인 클로드 tmux 세션 재시작 (EC2는 켜진 채)
-/diag          인증·EC2·메인·데몬·BG 세션 진단
-
-/help          이 도움말
-
-— Background agent 관리·일상 대화는 메인 클로드 봇과 대화하세요."""
+HANDLERS = {
+    '/start': cmd_start,
+    '/stop': cmd_stop,
+    '/status': cmd_status,
+    '/view': cmd_view,
+}
 
 
 def lambda_handler(event, context):
-    body = json.loads(event.get('body', '{}'))
+    if not INSTANCE_ID:
+        return {'statusCode': 500, 'body': 'INSTANCE_ID is not configured'}
+
+    body = json.loads(event.get('body') or '{}')
     message = body.get('message') or body.get('edited_message') or {}
-    chat_id = str(message.get('chat', {}).get('id', ''))
-    text = (message.get('text') or '').strip()
+    chat_id = str((message.get('chat') or {}).get('id', ''))
+    text = (message.get('text') or '').strip().split('@')[0]
 
-    allowed_id = os.environ['ALLOWED_CHAT_ID']
-    if chat_id != allowed_id or not text:
-        return {'statusCode': 200, 'body': 'ok'}
+    if chat_id != os.environ['ALLOWED_CHAT_ID']:
+        return {'statusCode': 200, 'body': 'ignored'}
 
-    try:
-        handle(chat_id, text)
-    except Exception as e:
-        tg_send(chat_id, f'❌ 핸들러 에러: {type(e).__name__}: {e}')
+    handler = HANDLERS.get(text)
+    if handler:
+        handler(chat_id)
+    elif text.startswith('/'):
+        tg_send(chat_id, HELP)
 
     return {'statusCode': 200, 'body': 'ok'}
-
-
-def handle(chat_id, text):
-    if text in ('/help', '/start'):
-        tg_send(chat_id, HELP_TEXT)
-        return
-
-    if text == '/status':
-        st = ec2_state()
-        emoji = {'running': '🟢', 'stopped': '🔴', 'pending': '🟡', 'stopping': '🟡'}.get(st, '⚪')
-        ip = ec2_public_ip()
-        msg = f'{emoji} EC2: {st}'
-        if ip:
-            msg += f'\nPublic IP: {ip}'
-        tg_send(chat_id, msg)
-        return
-
-    if text == '/start_ec2':
-        st = ec2_state()
-        if st == 'running':
-            tg_send(chat_id, '⚠️ 이미 실행 중')
-            return
-        if st != 'stopped':
-            tg_send(chat_id, f'⚠️ 현재 상태: {st}')
-            return
-        tg_send(chat_id, '🔄 EC2 시작 중...')
-        ec2.start_instances(InstanceIds=[INSTANCE_ID])
-        ec2.get_waiter('instance_running').wait(InstanceIds=[INSTANCE_ID])
-        time.sleep(20)
-        ssm.send_command(
-            InstanceIds=[INSTANCE_ID],
-            DocumentName='AWS-RunShellScript',
-            Parameters={
-                'commands': [
-                    'pgrep -f "claude" >/dev/null && exit 0',
-                    f"sudo -u ubuntu tmux new-session -d -s {MAIN_TMUX} '{BOOT_SCRIPT}'",
-                ],
-                'executionTimeout': ['60'],
-            },
-        )
-        tg_send(chat_id, '✅ EC2 켜졌어. 메인 클로드 부팅 중...')
-        return
-
-    if text == '/stop_ec2':
-        st = ec2_state()
-        if st == 'stopped':
-            tg_send(chat_id, '⚠️ 이미 꺼져있음')
-            return
-        if st != 'running':
-            tg_send(chat_id, f'⚠️ 현재 상태: {st}')
-            return
-        tg_send(chat_id, '🔄 종료 중...')
-        try:
-            ssm.send_command(
-                InstanceIds=[INSTANCE_ID],
-                DocumentName='AWS-RunShellScript',
-                Parameters={
-                    'commands': [
-                        'pkill -f claude || true',
-                        'sudo -u ubuntu tmux kill-server || true',
-                    ],
-                    'executionTimeout': ['15'],
-                },
-            )
-            time.sleep(5)
-        except Exception:
-            pass
-        ec2.stop_instances(InstanceIds=[INSTANCE_ID])
-        tg_send(chat_id, '✅ EC2 종료됨')
-        return
-
-    if text == '/restart_main':
-        if ec2_state() != 'running':
-            tg_send(chat_id, '⚠️ EC2가 꺼져있음. /start_ec2 먼저')
-            return
-        tg_send(chat_id, '🔄 메인 클로드 세션 재시작 중...')
-        res = restart_main_session()
-        out = strip_ansi(res['stdout'])[-1500:]
-        tg_send(chat_id, f'✅ 재시작 완료\n\n{out}' if res['status'] == 'Success' else f'⚠️ 재시작 결과 {res["status"]}\n\n{out}')
-        return
-
-    if text == '/diag':
-        if ec2_state() != 'running':
-            tg_send(chat_id, f'🩺 EC2: {ec2_state()} — 켜져있어야 진단 가능')
-            return
-        out = collect_diag()
-        tg_send(chat_id, f'🩺 진단\n\n{out[-3500:]}' if out else '⚠️ 진단 데이터 없음')
-        return
-
-    tg_send(chat_id, f'❓ 모르는 명령: {text.split()[0]}\n\n/help')
