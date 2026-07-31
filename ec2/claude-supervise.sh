@@ -37,6 +37,28 @@ PY
   fi
 fi
 
+# `claude --bg` hands work to an already-running supervisor instead of starting
+# a fresh one. A supervisor that came up while auth was broken keeps that state
+# and fails every dispatch after it, including brand-new sessions — so the main
+# session looks healthy while every background job returns 401. Drop a
+# supervisor that predates the current credentials; leave a newer one alone so
+# in-flight background work survives an ordinary restart.
+if [ -f "$ENV_FILE" ]; then
+  DAEMON_PID=$(pgrep -u "$(id -u)" -f 'claude daemon run' 2>/dev/null | head -1)
+  if [ -n "$DAEMON_PID" ]; then
+    ELAPSED=$(ps -o etimes= -p "$DAEMON_PID" 2>/dev/null | tr -d ' ')
+    if [ -n "$ELAPSED" ]; then
+      STARTED=$(( $(date +%s) - ELAPSED ))
+      ENV_MTIME=$(stat -c %Y "$ENV_FILE" 2>/dev/null || echo 0)
+      if [ "$ENV_MTIME" -gt "$STARTED" ]; then
+        pkill -u "$(id -u)" -f 'claude daemon run' 2>/dev/null || true
+        rm -rf "/tmp/cc-daemon-$(id -u)"
+        logger -t claude-supervise "dropped supervisor daemon older than current credentials"
+      fi
+    fi
+  fi
+fi
+
 tmux has-session -t "$SESSION" 2>/dev/null || \
   tmux new-session -d -s "$SESSION" "$BOOT_SCRIPT"
 
