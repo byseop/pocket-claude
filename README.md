@@ -62,6 +62,9 @@ You need an AWS account, an EC2 instance with the SSM agent, and two Telegram bo
 
 ## Auth
 
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the full diagnostic runbook — 401 has two
+distinct causes here with very different fixes, and re-issuing the token fixes neither of them.
+
 Claude Code on the instance authenticates with a long-lived OAuth token in `~/.claude/.env`:
 
 ```bash
@@ -77,8 +80,12 @@ sudo systemctl restart claude-telegram
 
 ```
 src/lambda_function.py   Lambda handler
-backup/                  earlier versions, kept for reference
-docs/superpowers/specs/  design docs
+tests/                   unit tests for the pure helpers (no AWS needed)
+ec2/                     supervisor, systemd unit, idle watcher, installer
+iam/                     self-stop policy template
+backup/                  earlier Lambda versions, kept for reference
+docs/OPERATIONS.md       runbook: diagnosis, deployment, incident record
+docs/superpowers/        design and implementation-plan docs
 .env.example             configuration template
 ```
 
