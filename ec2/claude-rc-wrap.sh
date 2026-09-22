@@ -17,7 +17,6 @@ set -u
 
 REPO=/home/ubuntu/gamer4info
 WORKTREES=/home/ubuntu/worktrees
-IDLE_STATE=/home/ubuntu/.claude-idle-state
 CREDS=/home/ubuntu/.claude/.credentials.json
 ENV_FILE=/home/ubuntu/.claude/.env
 
@@ -98,10 +97,6 @@ main() {
     logger -t claude-rc-wrap "workdir $dir does not exist for $name"
     exit 1
   fi
-
-  # Clear the stale idle counter. Without this, a boot right after an idle
-  # shutdown inherits the old timestamp and shuts down again immediately.
-  rm -f "$IDLE_STATE"
 
   guard_expired_credentials
   guard_stale_daemon

@@ -24,12 +24,14 @@ setup() {
 run() {   # usage: run [IDLE_MINUTES]
   PATH="$TMP/bin:$PATH" STATE="$TMP/state" PROJECTS_DIR="$TMP/projects" \
   JOBS_DIR="$TMP/jobs" SECRETS_FILE="$TMP/no-telegram-env" DRY_RUN=1 \
+  BOOT_EPOCH="${BOOT_EPOCH:-0}" \
   IDLE_MINUTES="${1:-60}" bash "$SCRIPT"
 }
 
 run_real() {   # usage: run_real [IDLE_MINUTES]
   PATH="$TMP/bin:$PATH" STATE="$TMP/state" PROJECTS_DIR="$TMP/projects" \
   JOBS_DIR="$TMP/jobs" SECRETS_FILE="$TMP/telegram.env" DRY_RUN=0 \
+  BOOT_EPOCH="${BOOT_EPOCH:-0}" \
   IDLE_MINUTES="${1:-60}" bash "$SCRIPT"
 }
 
@@ -160,5 +162,25 @@ assert_eq "$(stopped "$OUT")" no "active instance does not stop via real path"
   || { echo "FAIL aws called when instance was active"; FAILS=$((FAILS + 1)); }
 ! grep -qs "sendMessage" "$TMP/curl.log" && echo "ok   no notification when active" \
   || { echo "FAIL telegram notification sent when active"; FAILS=$((FAILS + 1)); }
+
+# 15. A state file written before this boot belongs to the previous run of the
+# instance: honouring it would stop the box seconds after it came up.
+setup
+echo "0 $(ago 7200)" > "$TMP/state"
+touch_ago "$TMP/state" 7200
+OUT=$(BOOT_EPOCH=$(ago 60) run)
+assert_eq "$(stopped "$OUT")" no "pre-boot state file is ignored"
+
+# 16. A garbled state file falls back to the defaults, without shell errors.
+setup
+echo "garbage here" > "$TMP/state"
+OUT=$(run 2>&1)
+assert_eq "$(stopped "$OUT")" no "garbled state file does not stop the instance"
+case "$OUT" in
+  *"integer expression"*)
+    echo "FAIL garbled state file produced shell errors"; echo "     got: $OUT"
+    FAILS=$((FAILS + 1)) ;;
+  *) echo "ok   garbled state file produces no shell errors" ;;
+esac
 
 [ "$FAILS" -eq 0 ] && echo "all passed" || { echo "$FAILS failed"; exit 1; }

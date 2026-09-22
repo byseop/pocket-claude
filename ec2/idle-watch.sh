@@ -8,9 +8,22 @@
 #   1. a conversation transcript (PROJECTS_DIR/*/*.jsonl) was written
 #   2. a `claude --bg` job is non-terminal and was touched recently
 #   3. a claude process burned CPU since the previous sample
-# State file: "<cpu seconds> <last active epoch>". The wrapper deletes it at
-# boot so a fresh boot always gets a full IDLE_MINUTES grace period.
+# State file: "<cpu seconds> <last active epoch>". Nothing deletes it; a file
+# written before the current boot, or one that does not parse, is ignored and
+# the run starts a fresh IDLE_MINUTES grace period.
 set -u
+
+# Epoch of the last boot. Linux only (/proc/uptime); elsewhere 0 disables the check.
+boot_epoch() {
+  if [ -r /proc/uptime ]; then
+    echo $(( $(date +%s) - $(cut -d. -f1 /proc/uptime) ))
+  else
+    echo 0
+  fi
+}
+
+# mtime of a file: GNU stat first, BSD stat second.
+state_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
 
 STATE=${STATE:-/home/ubuntu/.claude-idle-state}
 PROJECTS_DIR=${PROJECTS_DIR:-/home/ubuntu/.claude/projects}
@@ -23,6 +36,7 @@ IDLE_MINUTES=${IDLE_MINUTES:-60}
 BG_STALE_SECONDS=${BG_STALE_SECONDS:-1800}
 REGION=${REGION:-ap-northeast-2}
 DRY_RUN=${DRY_RUN:-0}
+BOOT_EPOCH=${BOOT_EPOCH:-$(boot_epoch)}
 
 NOW=$(date +%s)
 
@@ -81,7 +95,19 @@ PY
 CPU=$(claude_cpu)
 PREV_CPU=''
 PREV_ACTIVE=''
-[ -f "$STATE" ] && read -r PREV_CPU PREV_ACTIVE < "$STATE"
+if [ -f "$STATE" ]; then
+  # A state file older than the current boot describes the previous run of the
+  # instance: trusting it would stop the box seconds after it came up. Content
+  # that is not two plain integers is dropped for the same reason.
+  MTIME=$(state_mtime "$STATE" 2>/dev/null)
+  [ -n "$MTIME" ] || MTIME=0
+  if [ "$MTIME" -ge "$BOOT_EPOCH" ]; then
+    read -r PREV_CPU PREV_ACTIVE < "$STATE"
+    case "$PREV_CPU$PREV_ACTIVE" in
+      *[!0-9]*|'') PREV_CPU=''; PREV_ACTIVE='' ;;
+    esac
+  fi
+fi
 : "${PREV_CPU:=$CPU}" "${PREV_ACTIVE:=$NOW}"
 
 LAST=$(file_signal)

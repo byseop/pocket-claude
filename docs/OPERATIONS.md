@@ -197,8 +197,12 @@ DRY_RUN=1 /home/ubuntu/idle-watch.sh           # 판정만 출력, 정지 안 �
 ```
 
 매 실행 `idle=<분>/<한계> cpu=<초> last=<epoch>` 한 줄을 출력한다. 상태 파일
-`/home/ubuntu/.claude-idle-state`는 `<cpu초> <last_active>` 한 줄이고 부팅 시 래퍼가
-지운다 (없으면 그 시점부터 유예).
+`/home/ubuntu/.claude-idle-state`는 `<cpu초> <last_active>` 한 줄이다. 부팅 이전에 쓰인
+상태 파일은 무시한다 (`/proc/uptime` 기준); 없거나 무시되면 그 시점부터 유예. 정수 두
+개가 아닌 내용도 같은 방식으로 버린다.
+
+유닛이 10분 안에 5번 넘게 죽으면 systemd가 재시작을 멈추고 `failed`로 둔다
+(`StartLimitIntervalSec=600`, `StartLimitBurst=5`). `/status`에서 보인다.
 
 로컬 테스트: `bash tests/test_idle_watch.sh` (가짜 `~/.claude` 트리, AWS 불필요).
 

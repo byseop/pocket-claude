@@ -2,6 +2,9 @@
 Description=Claude Code Remote Control session (%i)
 After=network-online.target
 Wants=network-online.target
+# A crash loop parks the unit in "failed" (visible in /status) instead of restarting forever.
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
