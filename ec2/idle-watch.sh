@@ -1,89 +1,114 @@
 #!/bin/bash
-# Stops this instance after IDLE_LIMIT consecutive unchanged screen samples.
-# Runs from the ubuntu crontab every 5 minutes, so 12 samples = 60 minutes.
+# Stops this instance once no activity signal has fired for IDLE_MINUTES.
+# Runs from the ubuntu crontab every 5 minutes.
+#
+# Remote Control sessions talk to the phone over the network, so the tmux
+# screen can sit still while real work is going on. The screen hash the v4
+# watcher used is gone. Activity now means any of:
+#   1. a conversation transcript (PROJECTS_DIR/*/*.jsonl) was written
+#   2. a `claude --bg` job is non-terminal and was touched recently
+#   3. a claude process burned CPU since the previous sample
+# State file: "<cpu seconds> <last active epoch>". The wrapper deletes it at
+# boot so a fresh boot always gets a full IDLE_MINUTES grace period.
 set -u
 
-SESSION=claude
-STATE=/home/ubuntu/.claude-idle-state
-IDLE_LIMIT=${IDLE_LIMIT:-12}
-REGION=ap-northeast-2
-CHANNEL_DIR=/home/ubuntu/.claude/channels/telegram
-JOBS_DIR=/home/ubuntu/.claude/jobs
+STATE=${STATE:-/home/ubuntu/.claude-idle-state}
+PROJECTS_DIR=${PROJECTS_DIR:-/home/ubuntu/.claude/projects}
+JOBS_DIR=${JOBS_DIR:-/home/ubuntu/.claude/jobs}
+SECRETS_FILE=${SECRETS_FILE:-/home/ubuntu/.config/gamer4/secrets.env}
+IDLE_MINUTES=${IDLE_MINUTES:-60}
 # A background job counts as working only if it is both non-terminal and
 # recently touched. Without the freshness bound, a session stuck in a
 # non-terminal state would pin the instance on forever.
 BG_STALE_SECONDS=${BG_STALE_SECONDS:-1800}
+REGION=${REGION:-ap-northeast-2}
+DRY_RUN=${DRY_RUN:-0}
 
-tmux has-session -t "$SESSION" 2>/dev/null || exit 0
+NOW=$(date +%s)
 
-# The main pane goes static while `claude --bg` agents work, so screen hashing
-# alone would shut the box down mid-task and lose that work.
-bg_busy() {
-  [ -d "$JOBS_DIR" ] || return 1
-  python3 - "$JOBS_DIR" "$BG_STALE_SECONDS" <<'PY'
-import json, os, sys, time
+# Cumulative CPU seconds of every claude process owned by this user.
+# `cputimes` is procps (Linux); anywhere else this prints 0 and the other
+# two signals carry the decision.
+claude_cpu() {
+  ps -u "$(id -un)" -o cputimes= -o comm= 2>/dev/null \
+    | awk '$2 == "claude" { s += $1 } END { print s + 0 }'
+}
 
-jobs_dir, stale = sys.argv[1], int(sys.argv[2])
+# Prints the epoch of the newest transcript, or NOW when a fresh non-terminal
+# background job exists. Prints 0 when neither signal is present.
+file_signal() {
+  python3 - "$PROJECTS_DIR" "$JOBS_DIR" "$BG_STALE_SECONDS" <<'PY'
+import glob, json, os, sys, time
+
+projects, jobs, stale = sys.argv[1], sys.argv[2], int(sys.argv[3])
+now = time.time()
+last = 0
+
+for path in glob.glob(os.path.join(projects, '*', '*.jsonl')):
+    try:
+        last = max(last, os.path.getmtime(path))
+    except OSError:
+        pass
+
 # States that mean the job will not do further work on its own. "blocked"
 # belongs here: it waits on a human, so it must not hold the instance up.
 TERMINAL = {'done', 'failed', 'blocked', 'idle', 'cancelled', 'stopped',
             'completed', 'error'}
-now = time.time()
+if os.path.isdir(jobs):
+    for entry in os.scandir(jobs):
+        if not entry.is_dir():
+            continue
+        try:
+            state = json.load(open(os.path.join(entry.path, 'state.json'))).get('state')
+        except Exception:
+            continue
+        if state in TERMINAL:
+            continue
+        touched = max(
+            (os.path.getmtime(os.path.join(entry.path, f))
+             for f in ('state.json', 'timeline.jsonl')
+             if os.path.exists(os.path.join(entry.path, f))),
+            default=0,
+        )
+        if now - touched < stale:
+            last = now
+            break
 
-for entry in os.scandir(jobs_dir):
-    if not entry.is_dir():
-        continue
-    state_path = os.path.join(entry.path, 'state.json')
-    try:
-        state = json.load(open(state_path)).get('state')
-    except Exception:
-        continue
-    if state in TERMINAL:
-        continue
-    touched = max(
-        (os.path.getmtime(os.path.join(entry.path, f))
-         for f in ('state.json', 'timeline.jsonl')
-         if os.path.exists(os.path.join(entry.path, f))),
-        default=0,
-    )
-    if now - touched < stale:
-        print(f'{entry.name} state={state}')
-        sys.exit(0)          # busy
-sys.exit(1)                  # nothing running
+print(int(last))
 PY
 }
 
-if bg_busy; then
-  # Reset rather than skip: the idle window should start over once the
-  # background work finishes, not resume from a stale count.
-  echo "pending 0" > "$STATE"
-  logger -t idle-watch "background job active; idle counter reset"
+CPU=$(claude_cpu)
+PREV_CPU=''
+PREV_ACTIVE=''
+[ -f "$STATE" ] && read -r PREV_CPU PREV_ACTIVE < "$STATE"
+: "${PREV_CPU:=$CPU}" "${PREV_ACTIVE:=$NOW}"
+
+LAST=$(file_signal)
+[ "$CPU" -ne "$PREV_CPU" ] && LAST=$NOW
+[ "$LAST" -lt "$PREV_ACTIVE" ] && LAST=$PREV_ACTIVE
+echo "$CPU $LAST" > "$STATE"
+
+IDLE=$(( (NOW - LAST) / 60 ))
+echo "idle=${IDLE}/${IDLE_MINUTES} cpu=${CPU} last=${LAST}"
+[ "$IDLE" -lt "$IDLE_MINUTES" ] && exit 0
+
+if [ "$DRY_RUN" = 1 ]; then
+  echo "stop"
   exit 0
 fi
 
-HASH=$(tmux capture-pane -t "$SESSION" -p | md5sum | cut -d' ' -f1)
-PREV=$(cut -d' ' -f1 "$STATE" 2>/dev/null || echo '')
-COUNT=$(cut -d' ' -f2 "$STATE" 2>/dev/null || echo 0)
+logger -t idle-watch "idle ${IDLE} min; stopping instance"
 
-if [ "$HASH" = "$PREV" ]; then
-  COUNT=$((COUNT + 1))
-else
-  COUNT=0
-fi
-echo "$HASH $COUNT" > "$STATE"
-
-[ "$COUNT" -lt "$IDLE_LIMIT" ] && exit 0
-
-# Notify through the main bot token that already lives on this box, so the
+# Notify through the boot-manager bot token kept in secrets.env, so the
 # watcher needs no credentials of its own.
-if [ -f "$CHANNEL_DIR/.env" ]; then
-  TOK=$(grep -m1 '^TELEGRAM_BOT_TOKEN=' "$CHANNEL_DIR/.env" | cut -d= -f2- | tr -d "\"' \r\n")
-  CHAT=$(python3 -c "import json;print(json.load(open('$CHANNEL_DIR/access.json'))['allowFrom'][0])" 2>/dev/null || echo '')
-  if [ -n "$TOK" ] && [ -n "$CHAT" ]; then
-    MIN=$((IDLE_LIMIT * 5))
-    curl -s -X POST "https://api.telegram.org/bot${TOK}/sendMessage" \
-      -d chat_id="$CHAT" \
-      -d text="💤 ${MIN}분 유휴 — EC2를 자동 종료합니다. /start 로 다시 켜세요." >/dev/null
+if [ -f "$SECRETS_FILE" ]; then
+  TELEGRAM_TOKEN=''; TELEGRAM_CHAT_ID=''
+  . "$SECRETS_FILE"
+  if [ -n "$TELEGRAM_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+      -d chat_id="$TELEGRAM_CHAT_ID" \
+      -d text="💤 ${IDLE}분 유휴 — EC2를 자동 종료합니다. /start 로 다시 켜세요." >/dev/null
   fi
 fi
 
