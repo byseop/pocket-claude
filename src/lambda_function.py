@@ -151,10 +151,9 @@ def rm_session_script(name):
     d = workdir(name)
     return as_ubuntu(
         f'sudo systemctl stop {UNIT_PREFIX}{name}\n'
-        f'if [ -d {d} ]; then\n'
-        f'  if [ -n "$(git -C {d} status --porcelain)" ]; then echo DIRTY; exit 0; fi\n'
-        f'  git -C {REPO} worktree remove {d}\n'
-        'fi\n'
+        f'if [ ! -d {d} ]; then echo MISSING; exit 0; fi\n'
+        f'if [ -n "$(git -C {d} status --porcelain)" ]; then echo DIRTY; exit 0; fi\n'
+        f'git -C {REPO} worktree remove {d} || {{ echo RM_FAILED; exit 0; }}\n'
         'echo REMOVED'
     )
 
@@ -442,6 +441,10 @@ def cmd_rm(chat_id, arg):
             f'⚠️ {SESSION_PREFIX}{arg} 워크트리에 커밋 안 된 변경이 있어 삭제하지 않았어요.\n'
             '세션은 정지했습니다. 앱에서 커밋·푸시한 뒤 다시 /rm.',
         )
+    elif 'RM_FAILED' in out:
+        tg_send(chat_id, f'⚠️ {SESSION_PREFIX}{arg} 워크트리 삭제 실패. 세션은 정지했어요. SSM 셸에서 git worktree list 로 확인하세요.')
+    elif 'MISSING' in out:
+        tg_send(chat_id, f'ℹ️ {SESSION_PREFIX}{arg} 워크트리가 없어요. 세션 유닛만 정지했습니다.')
     elif 'REMOVED' in out:
         tg_send(chat_id, f'🗑 {SESSION_PREFIX}{arg} 워크트리 삭제. 브랜치는 남아 있어요.')
     else:

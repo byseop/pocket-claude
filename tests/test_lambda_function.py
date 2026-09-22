@@ -265,6 +265,10 @@ class TestSessionScripts(unittest.TestCase):
         self.assertIn('echo REMOVED', s)
         self.assertLess(s.index('echo DIRTY'), s.index('worktree remove'))
         self.assertNotIn('--force', s)
+        self.assertIn('echo RM_FAILED', s)
+        self.assertIn('echo MISSING', s)
+        self.assertLess(s.index('worktree remove'), s.index('echo RM_FAILED'))
+        self.assertLess(s.index('echo RM_FAILED'), s.index('echo REMOVED'))
 
 
 class TestHandlerRouting(unittest.TestCase):
@@ -377,6 +381,16 @@ class TestHandlerRouting(unittest.TestCase):
         lf.ssm_run = lambda script, timeout=25: self.ran.append(script) or 'REMOVED\n'
         lf.lambda_handler(self._event('/rm t1'), None)
         self.assertIn('삭제', self.sent[0][1])
+
+    def test_rm_failed_reports_failure(self):
+        lf.ssm_run = lambda script, timeout=25: self.ran.append(script) or 'RM_FAILED\n'
+        lf.lambda_handler(self._event('/rm t1'), None)
+        self.assertIn('실패', self.sent[0][1])
+
+    def test_rm_missing_dir_reports_nothing_to_remove(self):
+        lf.ssm_run = lambda script, timeout=25: self.ran.append(script) or 'MISSING\n'
+        lf.lambda_handler(self._event('/rm t1'), None)
+        self.assertIn('없', self.sent[0][1])
 
     def test_view_is_gone(self):
         lf.lambda_handler(self._event('/view'), None)
