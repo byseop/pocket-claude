@@ -15,7 +15,7 @@
       "Bash(npx vercel promote:*)", "Bash(npx vercel redeploy:*)", "Bash(npx vercel env:*)",
       "Bash(npx vercel firewall:*)", "Bash(npx vercel api:*)",
       "Bash(gh pr merge:*)",
-      "Bash(python3:*sb_sql.py*)",
+      "Bash(python3 *sb_sql.py*)",
       "Bash(aws lambda update-function-code:*)", "Bash(aws lambda update-function-configuration:*)",
       "Bash(aws ec2 stop-instances:*)"
     ],
