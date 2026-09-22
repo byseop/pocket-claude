@@ -14,3 +14,6 @@ __pycache__/
 
 # Deployed v3 snapshot keeps the real instance ID for rollback — local only
 backup/lambda_function.v3.py
+
+# Claude Code session data (worktrees, scratch) — local only
+.claude/
