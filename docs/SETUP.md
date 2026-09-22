@@ -33,14 +33,20 @@ npx vercel login
 cd ~/gamer4info && npx vercel link --scope byseops-projects   # 또는 VERCEL_TOKEN
 ```
 
-## 3. secrets.env
+## 3. secrets.env · telegram.env
 
 ```bash
 umask 077; mkdir -p ~/.config/gamer4
-cp /tmp/secrets.env.example ~/.config/gamer4/secrets.env   # 리포 ec2/secrets.env.example
-vi ~/.config/gamer4/secrets.env     # TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, SUPABASE_ACCESS_TOKEN(맥 키체인 값) 등
-chmod 600 ~/.config/gamer4/secrets.env
+cp /tmp/secrets.env.example ~/.config/gamer4/secrets.env     # 리포 ec2/secrets.env.example
+cp /tmp/telegram.env.example ~/.config/gamer4/telegram.env   # 리포 ec2/telegram.env.example
+vi ~/.config/gamer4/secrets.env      # GH_TOKEN, VERCEL_TOKEN, SUPABASE_ACCESS_TOKEN(맥 키체인 값)
+vi ~/.config/gamer4/telegram.env     # TELEGRAM_TOKEN, TELEGRAM_CHAT_ID (부트매니저 봇)
+chmod 600 ~/.config/gamer4/secrets.env ~/.config/gamer4/telegram.env
 ```
+
+`secrets.env`는 `claude-rc@.service`가 세션 환경변수로 올리므로 거기 넣은 값은 세션이
+`env`로 볼 수 있다. 부트매니저 봇 토큰을 `telegram.env`로 나눈 이유다 — 이 파일은
+`idle-watch.sh`만 읽는다.
 
 ## 4. 리포 비밀 파일
 

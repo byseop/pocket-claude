@@ -187,8 +187,9 @@ ubuntu 사용자(ops 세션 포함)는 sudoers(`/etc/sudoers.d/claude-rc`)로
 3. `claude` 프로세스 누적 CPU가 직전 샘플과 다름
 
 `last_active = max(직전 값, ①, ②·③이면 지금)`이고 `IDLE_MINUTES`(60) 이상 조용하면
-텔레그램 알림 후 `aws ec2 stop-instances`. 알림은 `secrets.env`의 `TELEGRAM_TOKEN`·
-`TELEGRAM_CHAT_ID`(부트매니저 봇)로 보낸다.
+텔레그램 알림 후 `aws ec2 stop-instances`. 알림은 `~/.config/gamer4/telegram.env`의
+`TELEGRAM_TOKEN`·`TELEGRAM_CHAT_ID`(부트매니저 봇)로 보낸다. `secrets.env`가 아니라
+별도 파일인 이유는 `secrets.env`가 세션 환경변수로 올라가기 때문이다.
 
 ```bash
 IDLE_MINUTES=5 /home/ubuntu/idle-watch.sh      # 검증용 단축
@@ -206,7 +207,7 @@ DRY_RUN=1 /home/ubuntu/idle-watch.sh           # 판정만 출력, 정지 안 �
 ### EC2 스크립트
 
 `ec2/` 아래 파일(`claude-rc@.service`, `claude-rc-wrap.sh`, `claude-rc.sudoers`,
-`idle-watch.sh`, `install.sh`)을 `/tmp`로 보내고 `sudo bash /tmp/install.sh`를
+`idle-watch.sh`, `install.sh`, `telegram.env.example`)을 `/tmp`로 보내고 `sudo bash /tmp/install.sh`를
 실행한다. 멱등하므로 여러 번 돌려도 된다.
 
 SSM `--parameters`에 한글이나 따옴표가 섞이면 CLI 파싱이 깨지므로 JSON 파일로

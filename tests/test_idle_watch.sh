@@ -23,13 +23,13 @@ setup() {
 
 run() {   # usage: run [IDLE_MINUTES]
   PATH="$TMP/bin:$PATH" STATE="$TMP/state" PROJECTS_DIR="$TMP/projects" \
-  JOBS_DIR="$TMP/jobs" SECRETS_FILE="$TMP/no-secrets" DRY_RUN=1 \
+  JOBS_DIR="$TMP/jobs" SECRETS_FILE="$TMP/no-telegram-env" DRY_RUN=1 \
   IDLE_MINUTES="${1:-60}" bash "$SCRIPT"
 }
 
 run_real() {   # usage: run_real [IDLE_MINUTES]
   PATH="$TMP/bin:$PATH" STATE="$TMP/state" PROJECTS_DIR="$TMP/projects" \
-  JOBS_DIR="$TMP/jobs" SECRETS_FILE="$TMP/secrets.env" DRY_RUN=0 \
+  JOBS_DIR="$TMP/jobs" SECRETS_FILE="$TMP/telegram.env" DRY_RUN=0 \
   IDLE_MINUTES="${1:-60}" bash "$SCRIPT"
 }
 
@@ -126,12 +126,12 @@ OUT=$(run)
 case "$OUT" in idle=10/60*) echo "ok   status line reports idle minutes" ;;
   *) echo "FAIL status line: $OUT"; FAILS=$((FAILS + 1)) ;; esac
 
-# 12. Real stop path with secrets present: notification is sent, instance is stopped.
+# 12. Real stop path with telegram.env present: notification is sent, instance is stopped.
 setup
 echo "0 $(ago 7200)" > "$TMP/state"
-printf 'TELEGRAM_TOKEN=tok123\nTELEGRAM_CHAT_ID=42\n' > "$TMP/secrets.env"
+printf 'TELEGRAM_TOKEN=tok123\nTELEGRAM_CHAT_ID=42\n' > "$TMP/telegram.env"
 OUT=$(run_real)
-assert_eq "$(stopped "$OUT")" yes "real stop with secrets returns stop"
+assert_eq "$(stopped "$OUT")" yes "real stop with telegram.env returns stop"
 grep -qs "bottok123/sendMessage" "$TMP/curl.log" && echo "ok   telegram notification sent" \
   || { echo "FAIL telegram notification not sent"; FAILS=$((FAILS + 1)); }
 grep -qs "chat_id=42" "$TMP/curl.log" && echo "ok   chat id passed to telegram" \
@@ -141,15 +141,15 @@ grep -qs "ec2 stop-instances" "$TMP/aws.log" && echo "ok   aws stop-instances ca
 ! grep -qs "tok123" <<< "$OUT" && echo "ok   token not leaked to stdout" \
   || { echo "FAIL token appeared in stdout"; FAILS=$((FAILS + 1)); }
 
-# 13. Real stop path with no secrets file: instance stops without notification.
+# 13. Real stop path with no telegram.env: instance stops without notification.
 setup
 echo "0 $(ago 7200)" > "$TMP/state"
 OUT=$(run_real)
-assert_eq "$(stopped "$OUT")" yes "real stop without secrets returns stop"
-! grep -qs "sendMessage" "$TMP/curl.log" && echo "ok   no telegram notification without secrets" \
-  || { echo "FAIL telegram notification sent despite no secrets"; FAILS=$((FAILS + 1)); }
-grep -qs "ec2 stop-instances" "$TMP/aws.log" && echo "ok   aws still called without secrets" \
-  || { echo "FAIL aws.log missing despite no secrets"; FAILS=$((FAILS + 1)); }
+assert_eq "$(stopped "$OUT")" yes "real stop without telegram.env returns stop"
+! grep -qs "sendMessage" "$TMP/curl.log" && echo "ok   no telegram notification without telegram.env" \
+  || { echo "FAIL telegram notification sent despite no telegram.env"; FAILS=$((FAILS + 1)); }
+grep -qs "ec2 stop-instances" "$TMP/aws.log" && echo "ok   aws still called without telegram.env" \
+  || { echo "FAIL aws.log missing despite no telegram.env"; FAILS=$((FAILS + 1)); }
 
 # 14. Real path while active: no stop action taken.
 setup

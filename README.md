@@ -72,7 +72,10 @@ them stops the instance after a Telegram notice.
 `default` mode, read-only tools allowed, production operations in `ask`
 (they prompt on the phone in every mode, including `auto`), `aws iam` and
 `.env` reads denied. Never press "always allow" on a production prompt: it
-writes an `allow` rule and the gate is gone.
+writes an `allow` rule and the gate is gone. Everything in `secrets.env` is
+part of the session's environment, so never ask the session to print `env`;
+the boot bot's token lives in `telegram.env`, which only the idle watcher
+reads.
 
 ## Setup
 
@@ -97,6 +100,7 @@ ec2/idle-watch.sh             idle watcher
 ec2/install.sh                installer (idempotent)
 ec2/claude-settings.json      ~/.claude/settings.json template
 ec2/secrets.env.example       ~/.config/gamer4/secrets.env template
+ec2/telegram.env.example      ~/.config/gamer4/telegram.env template (idle watcher only)
 ec2-claude-md-patch.md        rules to append to the instance's ~/.claude/CLAUDE.md
 iam/                          instance-role policy templates
 docs/SETUP.md                 one-time setup checklist
