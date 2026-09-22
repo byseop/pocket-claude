@@ -303,8 +303,9 @@ v4로 되돌리려면 `backup/lambda_function.v4.py`(이 커밋 이전의 `src/l
   `/status`는 `.env` 토큰 잔존·`.credentials.json` 존재·화면 401 스캔으로 대신한다
 - **세션 수 = 디스크·메모리** — 24GB EBS면 워크트리 2개까지. `--capacity 2`
 - **`/new`는 `yarn install`을 하지 않는다** — 세션에 들어가 필요할 때 시킨다
-- **sudoers 와일드카드** — `claude-rc@*`는 공백까지 매칭하므로 `systemctl start claude-rc@x --foo`도
-  통과한다. start/stop 외 동작은 못 하므로 허용한다
+- **sudoers는 정규식 규칙** — `^(start|stop) claude-rc@[a-z0-9-]{1,24}$`라서 인자는 정확히
+  `claude-rc@<name>` 하나만 받는다(글로브 `*`는 공백까지 매칭해 유닛을 덧붙일 수 있었다).
+  sudo 1.9.10+ 문법이고 `install.sh`가 설치 전 `visudo -cf`로 검증한다
 - **로컬에 session-manager-plugin이 없으면** `aws ssm start-session`을 못 쓴다.
   모든 인스턴스 작업을 `aws ssm send-command`로 해야 한다
 - **`ssm_run`의 25초 상한** — SSM이 느려지면 `/status`가 30초 한계에 근접할 수 있다.
