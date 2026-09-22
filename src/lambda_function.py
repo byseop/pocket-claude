@@ -109,7 +109,7 @@ def validate_name(name):
     """Return an error message for a bad session name, or None when fine."""
     if not name:
         return '세션 이름이 필요해요. 예: /new feat-x'
-    if not NAME_RE.match(name):
+    if not NAME_RE.fullmatch(name):
         return '이름은 소문자·숫자·하이픈 1~24자만 돼요.'
     if name == OPS:
         return f'{OPS} 는 예약된 이름이에요. 부팅 시 자동으로 뜹니다.'

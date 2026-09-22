@@ -132,6 +132,10 @@ class TestValidateName(unittest.TestCase):
     def test_reserves_ops(self):
         self.assertIn('ops', lf.validate_name('ops'))
 
+    def test_rejects_trailing_newline(self):
+        self.assertIsNotNone(lf.validate_name('t1\n'))
+        self.assertIsNotNone(lf.validate_name('t1\nrm -rf /'))
+
 
 class TestSessionScripts(unittest.TestCase):
     def test_workdir_ops_is_main_checkout(self):
