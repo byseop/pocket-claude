@@ -7,7 +7,6 @@
       "Bash(npx vercel ls:*)", "Bash(npx vercel logs:*)", "Bash(npx vercel metrics:*)", "Bash(npx vercel inspect:*)",
       "Bash(sam logs:*)",
       "Bash(aws logs:*)", "Bash(aws cloudformation describe-stacks:*)", "Bash(aws cloudformation describe-stack-events:*)",
-      "Bash(curl -s:*)",
       "Bash(yarn lint:*)", "Bash(yarn verify:*)", "Bash(yarn test:*)"
     ],
     "ask": [
