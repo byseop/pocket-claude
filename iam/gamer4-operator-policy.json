@@ -26,11 +26,31 @@
       ]
     },
     {
-      "Sid": "LambdaSyncFunctions",
+      "Sid": "LambdaListOnly",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:ListFunctions",
+        "lambda:GetAccountSettings"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LambdaReadOwnFunctions",
       "Effect": "Allow",
       "Action": [
         "lambda:Get*",
-        "lambda:List*",
+        "lambda:List*"
+      ],
+      "Resource": [
+        "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:gamer4-sync-*",
+        "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:gamer4-notify-alerts",
+        "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:ec2-boot-manager"
+      ]
+    },
+    {
+      "Sid": "LambdaDeploySyncFunctions",
+      "Effect": "Allow",
+      "Action": [
         "lambda:UpdateFunctionCode",
         "lambda:UpdateFunctionConfiguration"
       ],
@@ -45,7 +65,12 @@
     {
       "Sid": "SamArtifactBucket",
       "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ],
       "Resource": [
         "arn:aws:s3:::aws-sam-cli-managed-default-*",
         "arn:aws:s3:::aws-sam-cli-managed-default-*/*"
