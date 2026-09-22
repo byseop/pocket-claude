@@ -1,5 +1,6 @@
 # Lets the ubuntu user (the ops session, and SSM scripts running as ubuntu)
-# start and stop Remote Control session units, and nothing else.
+# start, stop, restart, enable, disable, or reset-failed Remote Control
+# claude-rc@<name>.service units, and nothing else.
 # Installed to /etc/sudoers.d/claude-rc with mode 0440.
 # Regex form (sudo >= 1.9.10, Ubuntu 24.04 ships 1.9.15): a glob would also match extra units after a space.
 ubuntu ALL=(root) NOPASSWD: /usr/bin/systemctl ^(start|stop|restart|enable|disable|reset-failed) claude-rc@[a-z0-9][a-z0-9-]{0,23}\.service$

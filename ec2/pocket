@@ -267,6 +267,9 @@ def cmd_trust(args):
     blind edit can be lost.
     """
     import time
+    # All waits scale from POCKET_TRUST_WAIT so tests can zero them out while
+    # the box keeps enough time for the dialog to render.
+    step = TRUST_WAIT / 12.0 if TRUST_WAIT else 0
     name = args[0] if args else ''
     path = project_dir(name)
     if path is None:
@@ -276,14 +279,14 @@ def cmd_trust(args):
     sock = ['tmux', '-L', 'pocket-trust']
     run(sock + ['kill-server'])
     run(sock + ['new-session', '-d', '-s', 'trust', '-x', '120', '-y', '40', '-c', path, 'claude'])
-    time.sleep(TRUST_WAIT)
+    time.sleep(TRUST_WAIT)      # dialog appears
     run(sock + ['send-keys', '-t', 'trust', 'Down'])
     run(sock + ['send-keys', '-t', 'trust', 'Enter'])
-    time.sleep(3)
+    time.sleep(step * 3)        # after Down+Enter
     run(sock + ['send-keys', '-t', 'trust', 'Enter'])      # settings warning, if any
-    time.sleep(2)
+    time.sleep(step * 2)        # after the settings-warning Enter
     run(sock + ['send-keys', '-t', 'trust', '/exit', 'Enter'])
-    time.sleep(3)
+    time.sleep(step * 3)        # after /exit
     run(sock + ['kill-server'])
     ok = trusted(path)
     if ok:

@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -306,6 +307,13 @@ class TestTrust(PocketCase):
         self.assertIn('send-keys', log)
         self.assertFalse(data['ok'])          # the fake never writes the trust key
         self.assertIn('신뢰', data['error'])
+
+    def test_trust_is_fast_when_wait_is_zero(self):
+        self.make_project('app', trusted=False)
+        write_exec(self.bin / 'tmux', FAKE_TMUX)
+        start = time.monotonic()
+        self.run_pocket('trust', 'app', '--json', POCKET_TRUST_WAIT='0')
+        self.assertLess(time.monotonic() - start, 5)
 
 
 if __name__ == '__main__':
