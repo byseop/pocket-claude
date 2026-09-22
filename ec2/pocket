@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""pocket - manage Claude Code Remote Control servers on this box.
+
+One server per project. A project is a directory (or a symlink to one) under
+POCKET_ROOT that contains a git repository. Everything the Telegram bot can
+do runs through this CLI, so the bot never needs to know the box layout.
+
+Output contract: with --json, exactly one JSON object is printed between the
+BEGIN and END sentinel lines, so a caller reading a mixed stdout (SSM merges
+warnings into it) can find the payload. Without --json, human-readable text.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+
+HOME = os.environ.get('POCKET_HOME', '/home/ubuntu')
+ROOT = os.environ.get('POCKET_ROOT', os.path.join(HOME, 'work'))
+CLAUDE_JSON = os.environ.get('POCKET_CLAUDE_JSON', os.path.join(HOME, '.claude.json'))
+PROJECTS_DIR = os.environ.get('POCKET_PROJECTS_DIR', os.path.join(HOME, '.claude', 'projects'))
+SUDO = os.environ.get('POCKET_SUDO', 'sudo -n')
+
+BEGIN = '===POCKET-BEGIN==='
+END = '===POCKET-END==='
+UNIT = 'claude-rc@{}.service'
+
+# The name becomes a systemd instance name, a tmux socket, a shell word and a
+# directory name. This character class is the injection guard; the Lambda
+# checks the same rule before the value ever reaches SSM.
+NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,23}$')
+
+
+def valid_name(name):
+    return bool(name) and NAME_RE.fullmatch(name) is not None
+
+
+def project_dir(name):
+    """Absolute real path of a project, or None when it is not one.
+
+    Symlinks are resolved: trust, transcripts and session resume are all
+    keyed on the real path, so everything else must use it too.
+    """
+    if not valid_name(name):
+        return None
+    path = os.path.join(ROOT, name)
+    if not os.path.isdir(path):
+        return None
+    real = os.path.realpath(path)
+    return real if os.path.isdir(os.path.join(real, '.git')) else None
+
+
+def slug(path):
+    """Transcript directory name Claude Code uses for a working directory."""
+    return path.replace('/', '-').replace('.', '-')
+
+
+def run(args, cwd=None):
+    """Run a command, returning (rc, stdout). Never raises."""
+    try:
+        p = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=20)
+        return p.returncode, p.stdout
+    except Exception:
+        return 1, ''
+
+
+def systemctl_state(name, verb):
+    rc, out = run(['systemctl', verb, UNIT.format(name)])
+    value = out.strip().splitlines()[0] if out.strip() else ''
+    return value or 'unknown'
+
+
+def trusted(path):
+    try:
+        with open(CLAUDE_JSON) as fh:
+            data = json.load(fh)
+    except Exception:
+        return False
+    entry = (data.get('projects') or {}).get(path) or {}
+    return bool(entry.get('hasTrustDialogAccepted'))
+
+
+def last_activity(path):
+    """Newest transcript mtime for this working directory, or 0."""
+    d = os.path.join(PROJECTS_DIR, slug(path))
+    newest = 0
+    for root, _dirs, files in os.walk(d):
+        for f in files:
+            if f.endswith('.jsonl'):
+                try:
+                    newest = max(newest, int(os.path.getmtime(os.path.join(root, f))))
+                except OSError:
+                    pass
+    return newest
+
+
+def count_worktrees(path):
+    rc, out = run(['git', '-C', path, 'worktree', 'list', '--porcelain'])
+    # The main checkout is the first entry; only extra worktrees count.
+    return max(sum(1 for line in out.splitlines() if line.startswith('worktree ')) - 1, 0)
+
+
+def describe(name):
+    path = project_dir(name)
+    if path is None:
+        return None
+    _rc, branch = run(['git', '-C', path, 'rev-parse', '--abbrev-ref', 'HEAD'])
+    _rc, dirty = run(['git', '-C', path, 'status', '--porcelain'])
+    return {
+        'name': name,
+        'path': path,
+        'unit': systemctl_state(name, 'is-active'),
+        'enabled': systemctl_state(name, 'is-enabled') == 'enabled',
+        'trusted': trusted(path),
+        'branch': branch.strip() or '?',
+        'dirty': bool(dirty.strip()),
+        'last_activity': last_activity(path),
+        'worktrees': count_worktrees(path),
+    }
+
+
+def list_projects():
+    try:
+        names = sorted(os.listdir(ROOT))
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        rec = describe(name)
+        if rec is not None:
+            out.append(rec)
+    return out
+
+
+def envelope(verb, data=None, error=None):
+    return {'ok': error is None, 'verb': verb, 'data': data or {}, 'error': error}
+
+
+def emit(obj, as_json):
+    if as_json:
+        print(BEGIN)
+        print(json.dumps(obj, ensure_ascii=False))
+        print(END)
+        return
+    if not obj['ok']:
+        print(f"error: {obj['error']}")
+        return
+    data = obj['data']
+    for p in data.get('projects', []):
+        dot = '*' if p['unit'] == 'active' else ' '
+        print(f"{dot} {p['name']:<24} {p['unit']:<10} {p['branch']:<20} "
+              f"trees={p['worktrees']} trusted={p['trusted']}")
+
+
+def cmd_list(args):
+    return envelope('list', {'projects': list_projects()})
+
+
+def cmd_check_name(args):
+    name = args[0] if args else ''
+    if valid_name(name):
+        return envelope('check-name', {'name': name})
+    return envelope('check-name', error='이름은 소문자·숫자·하이픈 1~24자, 첫 글자는 소문자나 숫자여야 해요.')
+
+
+VERBS = {
+    'list': cmd_list,
+    'check-name': cmd_check_name,
+}
+
+
+def main(argv):
+    as_json = '--json' in argv
+    argv = [a for a in argv if a != '--json']
+    verb = argv[0] if argv else 'list'
+    handler = VERBS.get(verb)
+    if handler is None:
+        emit(envelope(verb, error=f'알 수 없는 명령: {verb}'), as_json)
+        return 2
+    try:
+        result = handler(argv[1:])
+    except Exception as exc:  # noqa: BLE001 - the CLI must always answer
+        result = envelope(verb, error=f'{type(exc).__name__}: {exc}')
+    emit(result, as_json)
+    return 0 if result['ok'] else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))
