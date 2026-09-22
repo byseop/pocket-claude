@@ -46,18 +46,11 @@ NAME_RE = re.compile(r'^[a-z0-9-]{1,24}$')
 ANSI_RE = re.compile(r'\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][A-B]')
 AUTH_RE = re.compile(r'401|OAuth|Please run /login')
 
-# v4 leftovers. Task 4 rewrites /status and deletes these two lines and the
-# old RECOVERY text; until then the existing build_status tests must pass.
-SESSION = 'claude'
-SERVICE = 'claude-telegram'
-
 RECOVERY = (
-    '   복구:\n'
-    '   1. SSM 접속 후 sudo -u ubuntu -i\n'
-    '   2. claude setup-token\n'
-    '   3. umask 077\n'
-    "      echo 'export CLAUDE_CODE_OAUTH_TOKEN=<토큰>' > ~/.claude/.env\n"
-    '   4. sudo systemctl restart claude-telegram'
+    '   복구 (SSM 셸, ubuntu 사용자):\n'
+    '   1. ~/.claude/.env 에서 CLAUDE_CODE_OAUTH_TOKEN 줄 제거\n'
+    '   2. claude auth login   (claude.ai 선택)\n'
+    '   3. sudo systemctl restart claude-rc@ops'
 )
 
 
@@ -154,19 +147,116 @@ def kill_session_script(name):
     )
 
 
-def build_status(state, uptime, service_active, auth_error):
+def status_script():
+    """Three '---'-separated blocks: units, ops screen, auth flags."""
+    return (
+        f"systemctl list-units '{UNIT_PREFIX}*' --all --no-legend --plain "
+        "| awk '{print $1, $3}' || true\n"
+        'echo ---\n'
+        f'sudo -u ubuntu tmux capture-pane -t rc-{OPS} -p -S -200 2>/dev/null || true\n'
+        'echo ---\n'
+        f'grep -q CLAUDE_CODE_OAUTH_TOKEN {CLAUDE_ENV} 2>/dev/null && echo TOKEN_IN_ENV\n'
+        f'test -f {CLAUDE_CREDS} && echo CREDS_OK || echo CREDS_MISSING\n'
+    )
+
+
+def sessions_script():
+    """One '<name> <active> <branch> <last transcript epoch>' line per session.
+
+    The transcript directory is the working directory with '/' and '.'
+    turned into '-', which is how Claude Code names ~/.claude/projects/*.
+    """
+    return as_ubuntu(
+        f'for name in {OPS} $(ls {WORKTREES} 2>/dev/null); do\n'
+        f'  if [ "$name" = {OPS} ]; then dir={REPO}; else dir={WORKTREES}/$name; fi\n'
+        f'  active=$(systemctl is-active {UNIT_PREFIX}$name 2>/dev/null || true)\n'
+        '  branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")\n'
+        "  slug=$(echo \"$dir\" | tr '/.' '--')\n"
+        f'  last=$(ls -t {PROJECTS}/$slug/*.jsonl 2>/dev/null | head -1)\n'
+        '  if [ -n "$last" ]; then mtime=$(stat -c %Y "$last"); else mtime=0; fi\n'
+        '  echo "$name ${active:-unknown} $branch $mtime"\n'
+        'done'
+    )
+
+
+def parse_units(text):
+    """'claude-rc@ops.service active' lines -> [('ops', 'active'), ...]."""
+    rows = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 2 or not parts[0].startswith(UNIT_PREFIX):
+            continue
+        name = parts[0][len(UNIT_PREFIX):].removesuffix('.service')
+        rows.append((name, parts[1]))
+    return rows
+
+
+def auth_problem(pane, flags):
+    """Return a human-readable auth problem, or None when auth looks fine.
+
+    Remote Control only works on the claude.ai login in .credentials.json.
+    A leftover CLAUDE_CODE_OAUTH_TOKEN in ~/.claude/.env makes the CLI
+    refuse to start the server ("API-key auth takes precedence"), which is
+    the most likely misconfiguration after the v4 -> v5 migration.
+    """
+    if 'TOKEN_IN_ENV' in flags:
+        return '~/.claude/.env 에 CLAUDE_CODE_OAUTH_TOKEN 이 남아 있어요 (Remote Control 차단)'
+    if 'CREDS_MISSING' in flags:
+        return 'claude.ai 로그인이 없어요 — claude auth login 필요'
+    return detect_auth_error(pane)
+
+
+def build_status(state, uptime, units, auth_error):
     if state != 'running':
         return f'⚪ EC2 {state}\n   /start 로 켜세요.'
 
     lines = [f'✅ EC2 running ({uptime})']
-    lines.append(
-        f'✅ {SERVICE}.service active' if service_active
-        else f'❌ {SERVICE}.service 정지됨'
-    )
+    by_name = dict(units or [])
+    ops_state = by_name.pop(OPS, None)
+    if ops_state == 'active':
+        lines.append(f'🟢 {UNIT_PREFIX}{OPS} active')
+    else:
+        lines.append(f'❌ {UNIT_PREFIX}{OPS} {ops_state or "없음"} — 정지됨')
+    for name, unit_state in by_name.items():
+        dot = '🟢' if unit_state == 'active' else '⚪'
+        lines.append(f'{dot} {UNIT_PREFIX}{name} {unit_state}')
     if auth_error:
         lines.append(f'❌ 인증 실패\n   "{auth_error}"\n\n{RECOVERY}')
     else:
         lines.append('✅ 인증 OK')
+    return '\n'.join(lines)
+
+
+def format_age(epoch, now):
+    secs = max(int(now - epoch), 0)
+    if secs < 60:
+        return '방금'
+    if secs < 3600:
+        return f'{secs // 60}분 전'
+    if secs < 86400:
+        return f'{secs // 3600}시간 전'
+    return f'{secs // 86400}일 전'
+
+
+def parse_sessions(text):
+    """'<name> <active> <branch> <epoch>' lines -> tuples. Bad lines are dropped."""
+    rows = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) != 4 or not parts[3].isdigit():
+            continue
+        rows.append((parts[0], parts[1], parts[2], int(parts[3])))
+    return rows
+
+
+def build_sessions(rows, now):
+    if not rows:
+        return '세션 없음. /new <name> 으로 만드세요.'
+    lines = []
+    for name, active, branch, mtime in rows:
+        dot = '🟢' if active == 'active' else '⚪'
+        last = format_age(mtime, now) if mtime else '대화 없음'
+        lines.append(f'{dot} {SESSION_PREFIX}{name}  [{branch}]  {last}')
     return '\n'.join(lines)
 
 
@@ -203,7 +293,7 @@ def ssm_ready():
 def ssm_run(script, timeout=25):
     """Run a short read-only script and return stdout.
 
-    Only used by /status and /view. Never used to launch anything: systemd
+    Only used by /status and /sessions. Never used to launch anything: systemd
     owns startup now. The timeout ceiling keeps us well under API Gateway's
     30s integration limit.
     """
@@ -242,8 +332,8 @@ def cmd_start(chat_id, arg):
     ec2.start_instances(InstanceIds=[INSTANCE_ID])
     tg_send(
         chat_id,
-        '🔄 EC2를 켰습니다. 1분쯤 뒤 대화할 수 있어요.\n'
-        '클로드는 systemd가 자동으로 띄웁니다.',
+        f'🔄 EC2를 켰습니다. 1분쯤 뒤 Claude 앱 Code 탭에 {SESSION_PREFIX}{OPS} 세션이 보여요.\n'
+        '세션은 systemd가 자동으로 띄웁니다. /status 로 확인.',
     )
 
 
@@ -265,33 +355,21 @@ def cmd_status(chat_id, arg):
         tg_send(chat_id, '🔄 부팅 중 — SSM 에이전트 대기 중입니다.')
         return
 
-    out = ssm_run(
-        f'systemctl is-active {SERVICE} || true\n'
-        f'echo "---"\n'
-        f'sudo -u ubuntu tmux capture-pane -t {SESSION} -p -S -200 2>/dev/null || true\n'
-    )
-    head, _, pane = out.partition('---')
+    out = ssm_run(status_script())
+    units_text, _, rest = out.partition('---')
+    pane, _, flags = rest.partition('---')
     uptime = format_uptime(launch, datetime.now(timezone.utc))
     tg_send(
         chat_id,
-        build_status(
-            state, uptime, head.strip() == 'active', detect_auth_error(pane)
-        ),
+        build_status(state, uptime, parse_units(units_text), auth_problem(strip_ansi(pane), flags)),
     )
 
 
-def cmd_view(chat_id, arg):
-    state, _ = describe()
-    if state != 'running':
-        tg_send(chat_id, f'⚪ EC2 {state} — /start 로 켜세요.')
+def cmd_sessions(chat_id, arg):
+    if not require_running(chat_id):
         return
-    if not ssm_ready():
-        tg_send(chat_id, '🔄 부팅 중 — SSM 에이전트 대기 중입니다.')
-        return
-    out = ssm_run(
-        f'sudo -u ubuntu tmux capture-pane -t {SESSION} -p 2>/dev/null || echo "(세션 없음)"'
-    )
-    tg_send(chat_id, strip_ansi(out).rstrip() or '(빈 화면)')
+    out = ssm_run(sessions_script())
+    tg_send(chat_id, build_sessions(parse_sessions(out), time.time()))
 
 
 def require_running(chat_id):
@@ -353,7 +431,7 @@ HANDLERS = {
     '/start': cmd_start,
     '/stop': cmd_stop,
     '/status': cmd_status,
-    '/view': cmd_view,
+    '/sessions': cmd_sessions,
     '/new': cmd_new,
     '/kill': cmd_kill,
 }
