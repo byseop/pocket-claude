@@ -12,7 +12,8 @@ Environment=HOME=/home/ubuntu
 # missing. Never put CLAUDE_CODE_OAUTH_TOKEN here.
 EnvironmentFile=-/home/ubuntu/.config/gamer4/secrets.env
 ExecStart=/home/ubuntu/bin/claude-rc-wrap.sh %i
-ExecStop=/usr/bin/tmux kill-session -t rc-%i
+# One tmux server per unit (socket rc-%i): keeps each session in its own cgroup.
+ExecStop=/usr/bin/tmux -L rc-%i kill-session -t rc-%i
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30

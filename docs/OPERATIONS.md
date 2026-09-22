@@ -72,7 +72,7 @@ grep -c CLAUDE_CODE_OAUTH_TOKEN /home/ubuntu/.claude/.env || true   # 0 이어�
 
 ```bash
 systemctl status claude-rc@ops
-sudo -u ubuntu tmux capture-pane -t rc-ops -p | tail -20
+sudo -u ubuntu tmux -L rc-ops capture-pane -t rc-ops -p | tail -20
 journalctl -u claude-rc@ops -n 30
 ```
 
@@ -160,7 +160,7 @@ sudo systemctl restart claude-rc@ops
 systemctl list-units 'claude-rc@*' --all
 systemctl restart claude-rc@ops
 journalctl -u claude-rc@ops -n 50
-sudo -u ubuntu tmux ls                          # rc-<name> 세션들
+sudo -u ubuntu tmux -L rc-ops ls                # 유닛마다 소켓 `rc-<name>`, 세션 이름도 rc-<name>
 grep claude-rc-wrap /var/log/syslog | tail      # 가드 동작 기록
 grep idle-watch /var/log/syslog | tail          # 유휴 감시 기록
 ```

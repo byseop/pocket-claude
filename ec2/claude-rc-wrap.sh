@@ -106,12 +106,17 @@ main() {
   guard_expired_credentials
   guard_stale_daemon
 
-  tmux has-session -t "$session" 2>/dev/null || \
-    tmux new-session -d -s "$session" -c "$dir" "$(rc_command "$name")"
+  # One tmux server per unit, on socket rc-<name>. With the default shared
+  # socket only the first `new-session` starts a server, so every later
+  # session lands in that unit's cgroup (KillMode=control-group then kills
+  # them all when it restarts) and inherits its environment instead of its
+  # own EnvironmentFile.
+  tmux -L "rc-$name" has-session -t "$session" 2>/dev/null || \
+    tmux -L "rc-$name" new-session -d -s "$session" -c "$dir" "$(rc_command "$name")"
 
   # Block while the session lives. Exit non-zero when it dies so systemd
   # restarts it (Restart=on-failure).
-  while tmux has-session -t "$session" 2>/dev/null; do
+  while tmux -L "rc-$name" has-session -t "$session" 2>/dev/null; do
     sleep 10
   done
   exit 1

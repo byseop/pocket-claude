@@ -51,4 +51,11 @@ rc_valid_name 'Feat'; assert_eq "$?" 1 "rejects uppercase"
 rc_valid_name ''; assert_eq "$?" 1 "rejects empty"
 rc_valid_name "$(printf 'a%.0s' {1..25})"; assert_eq "$?" 1 "rejects name longer than 24 chars"
 
+# Every tmux call in main must name the per-unit socket rc-<name>, so each
+# unit owns its own tmux server (cgroup isolation + its own EnvironmentFile).
+SOCKETS=$(grep -c 'tmux -L "rc-\$name"' "$HERE/../ec2/claude-rc-wrap.sh")
+[ "$SOCKETS" -ge 3 ] \
+  && echo "ok   every tmux call uses the per-unit socket" \
+  || { echo "FAIL expected >=3 'tmux -L \"rc-\$name\"' calls, got $SOCKETS"; FAILS=$((FAILS + 1)); }
+
 [ "$FAILS" -eq 0 ] && echo "all passed" || { echo "$FAILS failed"; exit 1; }

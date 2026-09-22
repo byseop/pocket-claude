@@ -164,7 +164,7 @@ def status_script():
         f"systemctl list-units '{UNIT_PREFIX}*' --all --no-legend --plain "
         "| awk '{print $1, $3}' || true\n"
         'echo ---\n'
-        f'sudo -u ubuntu tmux capture-pane -t rc-{OPS} -p -S -200 2>/dev/null || true\n'
+        f'sudo -u ubuntu tmux -L rc-{OPS} capture-pane -t rc-{OPS} -p -S -200 2>/dev/null || true\n'
         'echo ---\n'
         f'grep -q CLAUDE_CODE_OAUTH_TOKEN {CLAUDE_ENV} 2>/dev/null && echo TOKEN_IN_ENV\n'
         f'test -f {CLAUDE_CREDS} && echo CREDS_OK || echo CREDS_MISSING\n'

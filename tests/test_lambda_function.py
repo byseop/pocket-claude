@@ -117,7 +117,7 @@ class TestStatusParsing(unittest.TestCase):
     def test_status_script_reads_units_pane_and_flags(self):
         s = lf.status_script()
         self.assertIn("list-units 'claude-rc@*'", s)
-        self.assertIn('tmux capture-pane -t rc-ops', s)
+        self.assertIn('tmux -L rc-ops capture-pane -t rc-ops', s)
         self.assertIn('CLAUDE_CODE_OAUTH_TOKEN', s)
         self.assertIn('.credentials.json', s)
         self.assertEqual(s.count('echo ---'), 2)
