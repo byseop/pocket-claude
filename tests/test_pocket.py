@@ -316,5 +316,72 @@ class TestTrust(PocketCase):
         self.assertLess(time.monotonic() - start, 5)
 
 
+FAKE_GIT_TREES = """#!/bin/sh
+echo "$@" >> "$FAKE_STATE_DIR/git.log"
+case "$*" in
+  *"worktree list --porcelain"*) cat "$FAKE_STATE_DIR/worktrees.txt" 2>/dev/null ;;
+  *"rev-parse --abbrev-ref HEAD"*) echo "${FAKE_BRANCH:-main}" ;;
+  *"status --porcelain"*)
+      case "$*" in *dirty*) echo " M f.txt" ;; *) : ;; esac ;;
+  *"log --oneline @{u}..HEAD"*)
+      case "$*" in *unpushed*) echo "abc1234 wip" ;; *) : ;; esac ;;
+  *"branch --merged"*) echo "  worktree-clean" ;;
+  *"worktree remove"*) echo "removed" ;;
+  *) : ;;
+esac
+"""
+
+
+class TestTrees(PocketCase):
+    def setup_trees(self, names):
+        d = self.make_project('app', trusted=True)
+        write_exec(self.bin / 'git', FAKE_GIT_TREES)
+        lines = [f'worktree {d}', 'branch refs/heads/main', '']
+        for n in names:
+            wt = d / '.claude' / 'worktrees' / n
+            wt.mkdir(parents=True)
+            lines += [f'worktree {wt}', f'branch refs/heads/worktree-{n}', '']
+        (self.state / 'worktrees.txt').write_text('\n'.join(lines))
+        return d
+
+    def test_trees_lists_only_extra_worktrees(self):
+        self.setup_trees(['clean', 'dirty'])
+        trees = self.json_of(self.run_pocket('trees', 'app', '--json'))['data']['trees']
+        self.assertEqual(sorted(t['branch'] for t in trees),
+                         ['worktree-clean', 'worktree-dirty'])
+
+    def test_trees_flags_dirty_and_unpushed(self):
+        self.setup_trees(['clean', 'dirty', 'unpushed'])
+        by = {t['branch']: t for t in self.json_of(self.run_pocket('trees', 'app', '--json'))['data']['trees']}
+        self.assertTrue(by['worktree-dirty']['dirty'])
+        self.assertTrue(by['worktree-unpushed']['unpushed'])
+        self.assertFalse(by['worktree-clean']['dirty'])
+        self.assertFalse(by['worktree-clean']['unpushed'])
+
+    def test_prune_removes_only_clean_trees(self):
+        self.setup_trees(['clean', 'dirty', 'unpushed'])
+        data = self.json_of(self.run_pocket('prune', 'app', '--json'))['data']
+        self.assertEqual([os.path.basename(p) for p in data['removed']], ['clean'])
+        kept = {os.path.basename(k['path']): k['reason'] for k in data['kept']}
+        self.assertIn('미커밋', kept['dirty'])
+        self.assertIn('미푸시', kept['unpushed'])
+
+    def test_prune_dry_run_removes_nothing(self):
+        self.setup_trees(['clean'])
+        data = self.json_of(self.run_pocket('prune', 'app', '--dry-run', '--json'))['data']
+        self.assertEqual(data['removed'], [])
+        self.assertIn('clean', str(data['would_remove']))
+        self.assertNotIn('worktree remove', (self.state / 'git.log').read_text())
+
+    def test_prune_keeps_tree_in_use(self):
+        # POCKET_CWDS stands in for the /proc scan of live claude processes.
+        d = self.setup_trees(['clean'])
+        data = self.json_of(self.run_pocket(
+            'prune', 'app', '--json',
+            POCKET_CWDS=str(d / '.claude' / 'worktrees' / 'clean')))
+        self.assertEqual(data['removed'], [])
+        self.assertIn('사용 중', data['kept'][0]['reason'])
+
+
 if __name__ == '__main__':
     unittest.main()

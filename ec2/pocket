@@ -163,6 +163,21 @@ def emit(obj, as_json):
     if verb in ('up', 'down'):
         print(f"{data.get('name')}: {data.get('unit')}")
         return
+    if verb == 'trees':
+        for t in data.get('trees', []):
+            flags = ' '.join(f for f, on in (
+                ('dirty', t['dirty']), ('unpushed', t['unpushed']), ('in_use', t['in_use'])
+            ) if on)
+            print(f"{t['branch']:<24} {t['path']}" + (f"  [{flags}]" if flags else ''))
+        return
+    if verb == 'prune':
+        for p in data.get('removed', []):
+            print(f"removed: {p}")
+        for p in data.get('would_remove', []):
+            print(f"would remove: {p}")
+        for k in data.get('kept', []):
+            print(f"kept: {k['path']} ({k['reason']})")
+        return
     for p in data.get('projects', []):
         dot = '*' if p['unit'] == 'active' else ' '
         print(f"{dot} {p['name']:<24} {p['unit']:<10} {p['branch']:<20} "
@@ -294,6 +309,105 @@ def cmd_trust(args):
     return envelope('trust', error=f'{name} 신뢰 수락에 실패했어요. SSM 셸에서 cd {path} && claude 로 직접 수락하세요.')
 
 
+def claude_cwds():
+    """Working directories of live claude processes.
+
+    POCKET_CWDS (colon-separated) overrides the scan in tests.
+    """
+    override = os.environ.get('POCKET_CWDS')
+    if override is not None:
+        # Realpath here too, so it matches the /proc branch below: both must
+        # compare against tree_state()'s realpath(wt).
+        return [os.path.realpath(p) for p in override.split(':') if p]
+    out = []
+    for pid in os.listdir('/proc') if os.path.isdir('/proc') else []:
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f'/proc/{pid}/comm') as fh:
+                if fh.read().strip() != 'claude':
+                    continue
+            out.append(os.path.realpath(f'/proc/{pid}/cwd'))
+        except OSError:
+            continue
+    return out
+
+
+def worktrees_of(path):
+    """Extra worktrees of a repo (the main checkout is excluded)."""
+    _rc, out = run(['git', '-C', path, 'worktree', 'list', '--porcelain'])
+    entries, cur = [], {}
+    for line in out.splitlines():
+        if line.startswith('worktree '):
+            if cur:
+                entries.append(cur)
+            cur = {'path': line.split(' ', 1)[1].strip()}
+        elif line.startswith('branch '):
+            cur['branch'] = line.split('/')[-1].strip()
+    if cur:
+        entries.append(cur)
+    return [e for e in entries if os.path.realpath(e.get('path', '')) != os.path.realpath(path)]
+
+
+def tree_state(repo, entry, cwds):
+    wt = entry['path']
+    _rc, dirty = run(['git', '-C', wt, 'status', '--porcelain'])
+    _rc, unpushed = run(['git', '-C', wt, 'log', '--oneline', '@{u}..HEAD'])
+    if not unpushed.strip():
+        # No upstream configured: compare against the default remote head.
+        _rc, unpushed = run(['git', '-C', wt, 'log', '--oneline', 'origin/HEAD..HEAD'])
+    return {
+        'path': wt,
+        'branch': entry.get('branch', '?'),
+        'dirty': bool(dirty.strip()),
+        'unpushed': bool(unpushed.strip()),
+        'in_use': os.path.realpath(wt) in cwds,
+    }
+
+
+def cmd_trees(args):
+    name = args[0] if args else ''
+    path = project_dir(name)
+    if path is None:
+        return envelope('trees', error=f'{name} 프로젝트가 없어요.')
+    cwds = claude_cwds()
+    trees = [tree_state(path, e, cwds) for e in worktrees_of(path)]
+    return envelope('trees', {'name': name, 'trees': trees})
+
+
+def cmd_prune(args):
+    dry = '--dry-run' in args
+    args = [a for a in args if a != '--dry-run']
+    name = args[0] if args else ''
+    path = project_dir(name)
+    if path is None:
+        return envelope('prune', error=f'{name} 프로젝트가 없어요.')
+    cwds = claude_cwds()
+    removed, kept, would = [], [], []
+    _rc, merged_out = run(['git', '-C', path, 'branch', '--merged'])
+    merged = {b.strip().lstrip('* ') for b in merged_out.splitlines()}
+    for entry in worktrees_of(path):
+        st = tree_state(path, entry, cwds)
+        reason = ('미커밋 변경이 있어요' if st['dirty'] else
+                  '미푸시 커밋이 있어요' if st['unpushed'] else
+                  '세션이 사용 중이에요' if st['in_use'] else None)
+        if reason:
+            kept.append({'path': st['path'], 'branch': st['branch'], 'reason': reason})
+            continue
+        if dry:
+            would.append(st['path'])
+            continue
+        rc, _out = run(['git', '-C', path, 'worktree', 'remove', st['path']])
+        if rc != 0:
+            kept.append({'path': st['path'], 'branch': st['branch'], 'reason': '삭제 실패'})
+            continue
+        removed.append(st['path'])
+        if st['branch'] in merged:
+            run(['git', '-C', path, 'branch', '-d', st['branch']])
+    return envelope('prune', {'name': name, 'removed': removed,
+                              'would_remove': would, 'kept': kept})
+
+
 def cmd_check_name(args):
     name = args[0] if args else ''
     if valid_name(name):
@@ -308,6 +422,8 @@ VERBS = {
     'down': cmd_down,
     'trust': cmd_trust,
     'status': cmd_status,
+    'trees': cmd_trees,
+    'prune': cmd_prune,
 }
 
 
