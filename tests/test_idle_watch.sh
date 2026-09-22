@@ -13,11 +13,23 @@ setup() {
   # Fake ps: one claude process whose cumulative CPU is $FAKE_CPU seconds.
   printf '#!/bin/sh\necho "${FAKE_CPU:-0} claude"\n' > "$TMP/bin/ps"
   chmod +x "$TMP/bin/ps"
+  # Fake curl: log all arguments, and print i-fake for IMDS queries.
+  printf '#!/bin/sh\necho "$@" >> "%s/curl.log"\ncase "$@" in *169.254.169.254*) echo "i-fake" ;; esac\n' "$TMP" > "$TMP/bin/curl"
+  chmod +x "$TMP/bin/curl"
+  # Fake aws: log all arguments.
+  printf '#!/bin/sh\necho "$@" >> "%s/aws.log"\n' "$TMP" > "$TMP/bin/aws"
+  chmod +x "$TMP/bin/aws"
 }
 
 run() {   # usage: run [IDLE_MINUTES]
   PATH="$TMP/bin:$PATH" STATE="$TMP/state" PROJECTS_DIR="$TMP/projects" \
   JOBS_DIR="$TMP/jobs" SECRETS_FILE="$TMP/no-secrets" DRY_RUN=1 \
+  IDLE_MINUTES="${1:-60}" bash "$SCRIPT"
+}
+
+run_real() {   # usage: run_real [IDLE_MINUTES]
+  PATH="$TMP/bin:$PATH" STATE="$TMP/state" PROJECTS_DIR="$TMP/projects" \
+  JOBS_DIR="$TMP/jobs" SECRETS_FILE="$TMP/secrets.env" DRY_RUN=0 \
   IDLE_MINUTES="${1:-60}" bash "$SCRIPT"
 }
 
@@ -113,5 +125,40 @@ echo "0 $(ago 600)" > "$TMP/state"
 OUT=$(run)
 case "$OUT" in idle=10/60*) echo "ok   status line reports idle minutes" ;;
   *) echo "FAIL status line: $OUT"; FAILS=$((FAILS + 1)) ;; esac
+
+# 12. Real stop path with secrets present: notification is sent, instance is stopped.
+setup
+echo "0 $(ago 7200)" > "$TMP/state"
+printf 'TELEGRAM_TOKEN=tok123\nTELEGRAM_CHAT_ID=42\n' > "$TMP/secrets.env"
+OUT=$(run_real)
+assert_eq "$(stopped "$OUT")" yes "real stop with secrets returns stop"
+grep -qs "bottok123/sendMessage" "$TMP/curl.log" && echo "ok   telegram notification sent" \
+  || { echo "FAIL telegram notification not sent"; FAILS=$((FAILS + 1)); }
+grep -qs "chat_id=42" "$TMP/curl.log" && echo "ok   chat id passed to telegram" \
+  || { echo "FAIL chat id not in curl log"; FAILS=$((FAILS + 1)); }
+grep -qs "ec2 stop-instances" "$TMP/aws.log" && echo "ok   aws stop-instances called" \
+  || { echo "FAIL aws.log missing stop-instances"; FAILS=$((FAILS + 1)); }
+! grep -qs "tok123" <<< "$OUT" && echo "ok   token not leaked to stdout" \
+  || { echo "FAIL token appeared in stdout"; FAILS=$((FAILS + 1)); }
+
+# 13. Real stop path with no secrets file: instance stops without notification.
+setup
+echo "0 $(ago 7200)" > "$TMP/state"
+OUT=$(run_real)
+assert_eq "$(stopped "$OUT")" yes "real stop without secrets returns stop"
+! grep -qs "sendMessage" "$TMP/curl.log" && echo "ok   no telegram notification without secrets" \
+  || { echo "FAIL telegram notification sent despite no secrets"; FAILS=$((FAILS + 1)); }
+grep -qs "ec2 stop-instances" "$TMP/aws.log" && echo "ok   aws still called without secrets" \
+  || { echo "FAIL aws.log missing despite no secrets"; FAILS=$((FAILS + 1)); }
+
+# 14. Real path while active: no stop action taken.
+setup
+echo "0 $(ago 600)" > "$TMP/state"
+OUT=$(run_real)
+assert_eq "$(stopped "$OUT")" no "active instance does not stop via real path"
+! grep -qs "stop-instances" "$TMP/aws.log" && echo "ok   aws not called when active" \
+  || { echo "FAIL aws called when instance was active"; FAILS=$((FAILS + 1)); }
+! grep -qs "sendMessage" "$TMP/curl.log" && echo "ok   no notification when active" \
+  || { echo "FAIL telegram notification sent when active"; FAILS=$((FAILS + 1)); }
 
 [ "$FAILS" -eq 0 ] && echo "all passed" || { echo "$FAILS failed"; exit 1; }

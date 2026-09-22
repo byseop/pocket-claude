@@ -93,8 +93,9 @@ IDLE=$(( (NOW - LAST) / 60 ))
 echo "idle=${IDLE}/${IDLE_MINUTES} cpu=${CPU} last=${LAST}"
 [ "$IDLE" -lt "$IDLE_MINUTES" ] && exit 0
 
+echo "stop"
+
 if [ "$DRY_RUN" = 1 ]; then
-  echo "stop"
   exit 0
 fi
 
