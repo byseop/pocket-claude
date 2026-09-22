@@ -227,8 +227,23 @@ t3.medium(4GB) 기준 실측·추정: 유휴 서버 약 150MB, 대화 중 세션
 
 ### 5-8. 유휴 감시 수정
 
-- **단계 0 (지금 바로)**: "claude CPU가 바뀌면 활동"을 "5분 동안 claude CPU가 **30초 이상** 늘면 활동"으로 바꾼다. 유휴 서버 하나의 잡음은 5분에 약 5초(F12)
-- **단계 1**: 신호를 `claude-rc.slice` cgroup 전체 CPU로 바꾸고 기준을 한 코어의 20%(5분에 60초)로 한다. 세션이 띄운 빌드·테스트(이름이 `claude`가 아닌 자식 프로세스)도 잡히고, 서버 여러 개의 잡음은 걸러진다
+지금까지의 신호(화면 해시 → CPU 변화량)는 전부 **바깥에서 추측**하는 방식이었고 둘 다 틀렸다. Claude Code가 세션 상태를 직접 알려주는 명령이 있다(F15).
+
+```
+claude agents --json
+→ 세션마다 cwd, kind, status, waitingFor(permission prompt / input needed …), state
+```
+
+**새 판정 규칙 (주 신호).**
+- 어느 세션이든 작업 중이면 활동 → 카운터 리셋
+- 모든 세션이 대기 상태면 유휴. **사람 입력을 기다리는 세션(`waitingFor`)도 유휴로 센다** — v5가 백그라운드 작업의 `blocked`를 종료 상태로 본 것과 같은 이유다. 60분 동안 답이 없으면 그건 사람이 자리를 뜬 것이다
+- 명령이 실패하거나 느리면 "알 수 없음"으로 보고 아래 보조 신호로 판단한다
+
+**보조 신호 (보험).** 트랜스크립트 mtime, `~/.claude/jobs`의 비종료 작업, `claude-rc.slice` cgroup CPU가 5분에 60초(한 코어의 20%) 이상. CPU는 더 이상 주 신호가 아니다.
+
+단계 0에서는 v5 스크립트의 CPU 조건만 "5분에 30초 이상 증가"로 바꿔 급한 불을 끄고(유휴 서버 하나의 잡음이 5분에 약 5초, F12), 단계 1에서 위 규칙으로 바꾼다.
+
+**대안 (단순함을 원할 때).** 판정 자체를 없애고 "부팅 후 3시간이면 무조건 정지" 같은 상한을 둘 수도 있다. 예측 가능하고 오판이 없는 대신, 작업 중에도 끊긴다. 두 방식을 같이 쓸 수도 있다(유휴 60분 또는 최대 6시간).
 
 ### 5-9. 테스트
 
@@ -268,6 +283,7 @@ t3.medium(4GB) 기준 실측·추정: 유휴 서버 약 150MB, 대화 중 세션
 3. "Enable Remote Control?" 수락이 계정 단위인지 폴더 단위인지. v5 설치 때 2.1.278은 이 질문 없이 바로 연결됐다
 4. managed `ask`가 폰 프롬프트를 띄우고 "다시 묻지 않기" 뒤에도 유지되는지
 5. `pocket trust` 절차가 다른 리포에서도 그대로 되는지
+6. **`claude agents --json`이 Remote Control 세션을 보여주는지**, 대화 중·빌드 중·승인 대기일 때 `status`/`waitingFor`가 어떻게 나오는지 (§5-8의 새 유휴 판정이 여기 달려 있다)
 
 ---
 
@@ -288,6 +304,7 @@ t3.medium(4GB) 기준 실측·추정: 유휴 서버 약 150MB, 대화 중 세션
 - **F11 텔레그램.** `callback_data` 1~64바이트. 버튼 누름마다 `answerCallbackQuery` 필요. 버튼만 바꿀 때는 `editMessageReplyMarkup`.
 - **F12 유휴 CPU (실측 2026-09-22).** 대화 없는 서버 하나(서버 + 세션 프로세스)가 60초에 CPU 1초. 5분 간격 샘플이 매번 달라 idle-watch가 영원히 활동으로 판정.
 - **F13 샌드박스.** Remote Control에 `--sandbox` 플래그가 있다. 기본값은 작업 폴더 밖 쓰기만 막고 **읽기는 자격증명 파일 포함 허용**. `sandbox.filesystem.denyRead`로 막으며 OS 수준이라 모든 하위 프로세스에 적용. Ubuntu는 `bubblewrap`·`socat` 필요.
+- **F15 세션 상태 조회.** `claude agents --json`은 살아 있는 세션을 JSON 배열로 출력하고 종료한다. 항목마다 `cwd`·`kind`·`startedAt`, 프로세스가 살아 있으면 `pid`·`status`, 대기 중이면 `waitingFor`(`permission prompt`, `input needed`, `sandbox request`, `worker request`, `dialog open`), 백그라운드 세션이면 `state`(`working`/`blocked`/`done`/`failed`/`stopped`). `--cwd <경로>`로 특정 폴더 하위만 볼 수 있다. Remote Control 서버가 띄운 세션이 여기 포함되는지는 실측 필요(§8-6).
 - **F14 메인 세션.** `--create-session-in-dir`(기본 켜짐)은 기동 시 현재 폴더에 세션 하나를 미리 만들고, worktree 모드에서도 이 세션은 현재 폴더에 남는다. 끄면 서버 정지 시 세션이 보관 처리되어 복귀할 게 없다.
 
 ## 부록 B. 리뷰 반영 기록
