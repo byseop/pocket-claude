@@ -12,6 +12,20 @@ df -h / ; free -m ; curl -s http://169.254.169.254/latest/meta-data/instance-typ
 24GB EBS면 워크트리(세션)는 `ops` 외 2개까지다. 세션 3개 이상을 쓰려면 t3.large +
 EBS 40GB로 늘린다. 세션당 메모리는 유휴 121MB, 포화 518MB(맥 실측).
 
+## 0-1. 파일 준비
+
+아래 단계는 리포의 `ec2/*`와 루트 `ec2-claude-md-patch.md`가 인스턴스 `/tmp`에 있다고
+가정한다. 맥에서 먼저 올린다.
+
+```bash
+# commands 배열에 파일별 `cat > /tmp/<파일> <<'EOF' ... EOF` 를 담은 JSON 파라미터 파일을
+# 만들어 보낸다. 한글·따옴표가 섞이면 --parameters 인라인 파싱이 깨지므로 항상 파일로 준다.
+aws ssm send-command --instance-ids "$INSTANCE_ID" \
+  --document-name AWS-RunShellScript --parameters file:///tmp/put-files.json
+```
+
+SSM 세션 셸에서 `cat > /tmp/<파일>` 로 직접 붙여넣어도 된다.
+
 ## 1. 인증 — claude.ai 로그인으로 교체
 
 `claude setup-token`/`CLAUDE_CODE_OAUTH_TOKEN`으로는 Remote Control 세션을 만들 수
@@ -119,3 +133,7 @@ systemctl status claude-rc@ops
 | 폰에서 "sam deploy 해줘" | 폰에 승인 프롬프트, 거부하면 실행 안 됨. **"항상 허용" 누르지 않는다** |
 | 폰에서 "sam deploy 해줘" 승인 | CreateChangeSet 성공 (정책 부족이면 여기서 AccessDenied) |
 | `IDLE_MINUTES=5 ~/idle-watch.sh` 를 6분 간격 2회 | 두 번째에 텔레그램 알림 후 정지 |
+| 폰에서 "python3 ~/bin/sb_sql.py …" 요청 | ask 프롬프트가 뜬다 (중간 와일드카드 패턴 검증) |
+| 폰에서 ".env 읽어줘" 요청 | deny로 거부된다 |
+| `/status` 를 세션이 정상일 때 3회 | "❌ 인증 실패" 오탐 없음 (화면의 OAuth 로그 문구 오탐 확인) |
+| 세션이 떠 있고 아무 대화도 없는 상태에서 `IDLE_MINUTES=5 /home/ubuntu/idle-watch.sh` 를 6분 간격 2회 | 두 번째에 stop. 매번 `cpu=` 값이 변하면 CPU 잡음 → 임계값 도입 필요 |

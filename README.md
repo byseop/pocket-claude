@@ -43,7 +43,7 @@ SSM and every failure mode traced back to that decision (post-mortem in
 | `/sessions` | One line per session: active, branch, last conversation |
 | `/new <name>` | `git worktree add ~/worktrees/<name>` + `systemctl start claude-rc@<name>` |
 | `/kill <name>` | Stop the unit. Worktree and branch stay |
-| `/rm <name>` | Stop, then remove the worktree. Refused if it has uncommitted changes |
+| `/rm <name>` | Stop, then remove the worktree. Refused if it has uncommitted changes; reports removal failure and a missing worktree separately |
 
 `<name>` is `[a-z0-9-]{1,24}`; `ops` is reserved. Nothing blocks for long:
 API Gateway allows 30 s and `/new` only waits for `systemctl start`.

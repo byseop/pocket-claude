@@ -56,6 +56,7 @@ PY
   fi
 }
 
+# v5 change: the reference file is .credentials.json (claude.ai login); .env is only a fallback.
 # `claude --bg` hands work to an already-running supervisor daemon. A daemon
 # that came up while auth was broken keeps that state and fails every
 # dispatch after it. Drop a daemon older than the current credentials; leave

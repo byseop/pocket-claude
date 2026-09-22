@@ -78,10 +78,10 @@ journalctl -u claude-rc@ops -n 30
 
 화면에 `Enable Remote Control?`이 떠 있으면 1회 수락이 안 된 것이다 — `docs/SETUP.md` 8단계.
 
-v5에서는 .env에 토큰이 없으므로 이 가드는 발동하지 않는다. 토큰을 다시 넣으면 그때
-살아난다. 코드는 claude-rc-wrap.sh에 남겨 두었다.
-
 ### 함정 A — 만료된 `.credentials.json`이 토큰을 가린다
+
+v5에서는 `.env`에 토큰이 없으므로 이 가드는 발동하지 않는다. 토큰을 다시 넣으면 그때
+살아난다. 코드는 `claude-rc-wrap.sh`에 남겨 두었다.
 
 대화형(`--channels`) 경로는 `~/.claude/.credentials.json`을 **환경변수
 `CLAUDE_CODE_OAUTH_TOKEN`보다 먼저** 집어든다. 그 파일이 만료됐으면 갱신을 시도하고,
@@ -141,9 +141,9 @@ rm -rf /tmp/cc-daemon-$(id -u ubuntu)
 
 데몬을 다시 띄우면 **막혀 있던 기존 세션까지 이어서 완료된다.** 재실행할 필요가 없다.
 
-**자동화되어 있다.** `claude-rc-wrap.sh`가 기동 시 데몬 시작 시각과 `.env` mtime을
-비교해, 자격증명이 더 최신일 때만 데몬을 정리한다. 데몬이 더 최신이면 건드리지
-않으므로 일반 재시작에서는 진행 중인 bg 작업이 살아남는다.
+**자동화되어 있다.** `claude-rc-wrap.sh`가 기동 시 데몬 시작 시각과 `.credentials.json`
+mtime(파일이 없으면 `.env`로 폴백)을 비교해, 자격증명이 더 최신일 때만 데몬을 정리한다.
+데몬이 더 최신이면 건드리지 않으므로 일반 재시작에서는 진행 중인 bg 작업이 살아남는다.
 
 ### 재로그인
 
@@ -211,8 +211,9 @@ DRY_RUN=1 /home/ubuntu/idle-watch.sh           # 판정만 출력, 정지 안 �
 ### EC2 스크립트
 
 `ec2/` 아래 파일(`claude-rc@.service`, `claude-rc-wrap.sh`, `claude-rc.sudoers`,
-`idle-watch.sh`, `install.sh`, `telegram.env.example`)을 `/tmp`로 보내고 `sudo bash /tmp/install.sh`를
-실행한다. 멱등하므로 여러 번 돌려도 된다.
+`idle-watch.sh`, `install.sh`, `claude-settings.json`, `secrets.env.example`,
+`telegram.env.example`)과 리포 루트의 `ec2-claude-md-patch.md`를 `/tmp`로 보내고
+`sudo bash /tmp/install.sh`를 실행한다. 멱등하므로 여러 번 돌려도 된다.
 
 SSM `--parameters`에 한글이나 따옴표가 섞이면 CLI 파싱이 깨지므로 JSON 파일로
 전달한다. 그리고 **SSM RunShellScript는 bash가 아니라 `/bin/sh`(dash)로 실행된다** —
