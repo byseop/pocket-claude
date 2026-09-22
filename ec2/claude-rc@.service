@@ -1,0 +1,21 @@
+[Unit]
+Description=Claude Code Remote Control session (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=HOME=/home/ubuntu
+# Optional: GH_TOKEN, VERCEL_TOKEN, SUPABASE_ACCESS_TOKEN, TELEGRAM_* for the
+# session's tools. The leading "-" keeps the unit bootable when the file is
+# missing. Never put CLAUDE_CODE_OAUTH_TOKEN here.
+EnvironmentFile=-/home/ubuntu/.config/gamer4/secrets.env
+ExecStart=/home/ubuntu/bin/claude-rc-wrap.sh %i
+ExecStop=/usr/bin/tmux kill-session -t rc-%i
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
