@@ -22,6 +22,12 @@ CLAUDE_JSON = os.environ.get('POCKET_CLAUDE_JSON', os.path.join(HOME, '.claude.j
 PROJECTS_DIR = os.environ.get('POCKET_PROJECTS_DIR', os.path.join(HOME, '.claude', 'projects'))
 SUDO = os.environ.get('POCKET_SUDO', 'sudo -n')
 
+MAX_SERVERS = int(os.environ.get('POCKET_MAX_SERVERS', '2'))
+MIN_FREE_GB = float(os.environ.get('POCKET_MIN_FREE_GB', '3'))
+TRUST_WAIT = float(os.environ.get('POCKET_TRUST_WAIT', '12'))
+CREDS = os.path.join(HOME, '.claude', '.credentials.json')
+CLAUDE_ENV = os.path.join(HOME, '.claude', '.env')
+
 BEGIN = '===POCKET-BEGIN==='
 END = '===POCKET-END==='
 UNIT = 'claude-rc@{}.service'
@@ -147,6 +153,16 @@ def emit(obj, as_json):
         print(f"error: {obj['error']}")
         return
     data = obj['data']
+    verb = obj['verb']
+    if verb == 'status':
+        print(f"servers={len(data.get('servers', []))} "
+              f"mem={data.get('mem', {}).get('available_mb')}MB "
+              f"disk={data.get('disk', {}).get('free_gb')}GB "
+              f"creds={data.get('auth', {}).get('creds')}")
+        return
+    if verb in ('up', 'down'):
+        print(f"{data.get('name')}: {data.get('unit')}")
+        return
     for p in data.get('projects', []):
         dot = '*' if p['unit'] == 'active' else ' '
         print(f"{dot} {p['name']:<24} {p['unit']:<10} {p['branch']:<20} "
@@ -155,6 +171,124 @@ def emit(obj, as_json):
 
 def cmd_list(args):
     return envelope('list', {'projects': list_projects()})
+
+
+def sudo_systemctl(*args):
+    """systemctl through sudo, matching the narrow sudoers rule. Returns the return code."""
+    cmd = SUDO.split() + ['systemctl', *args] if SUDO else ['systemctl', *args]
+    rc, _out = run(cmd)
+    return rc
+
+
+def free_gb(path):
+    try:
+        st = os.statvfs(path)
+        return (st.f_bavail * st.f_frsize) / (1024 ** 3)
+    except OSError:
+        return 0.0
+
+
+def mem_info():
+    info = {'total_mb': 0, 'available_mb': 0}
+    try:
+        with open('/proc/meminfo') as fh:
+            for line in fh:
+                if line.startswith('MemTotal:'):
+                    info['total_mb'] = int(line.split()[1]) // 1024
+                elif line.startswith('MemAvailable:'):
+                    info['available_mb'] = int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return info
+
+
+def running_count(projects):
+    return sum(1 for p in projects if p['unit'] == 'active')
+
+
+def cmd_up(args):
+    name = args[0] if args else ''
+    if not valid_name(name):
+        return envelope('up', error='이름은 소문자·숫자·하이픈 1~24자여야 해요.')
+    path = project_dir(name)
+    if path is None:
+        return envelope('up', error=f'{name} 프로젝트가 없어요. ~/work 아래에 폴더나 링크를 두세요.')
+    if not trusted(path):
+        return envelope('up', error=f'{name} 는 아직 신뢰되지 않았어요. pocket trust {name} 를 먼저 하세요.')
+    free = free_gb(path)
+    if free < MIN_FREE_GB:
+        return envelope('up', error=f'디스크 여유가 {free:.1f}GB뿐이에요 (최소 {MIN_FREE_GB}GB).')
+    projects = list_projects()
+    if running_count(projects) >= MAX_SERVERS and systemctl_state(name, 'is-active') != 'active':
+        return envelope('up', error=f'동시에 켤 수 있는 서버는 {MAX_SERVERS}개예요. 하나를 먼저 끄세요.')
+    rc_enable = sudo_systemctl('enable', UNIT.format(name))
+    rc_start = sudo_systemctl('start', UNIT.format(name))
+    if rc_enable != 0 or rc_start != 0:
+        return envelope('up', error=f'{name} 기동에 실패했어요. sudo 규칙이나 유닛 상태를 확인하세요.')
+    return envelope('up', {'name': name, 'unit': systemctl_state(name, 'is-active')})
+
+
+def cmd_down(args):
+    name = args[0] if args else ''
+    if project_dir(name) is None:
+        return envelope('down', error=f'{name} 프로젝트가 없어요.')
+    rc_disable = sudo_systemctl('disable', UNIT.format(name))
+    rc_stop = sudo_systemctl('stop', UNIT.format(name))
+    if rc_disable != 0 or rc_stop != 0:
+        return envelope('down', error=f'{name} 정지에 실패했어요. sudo 규칙이나 유닛 상태를 확인하세요.')
+    return envelope('down', {'name': name, 'unit': systemctl_state(name, 'is-active')})
+
+
+def cmd_status(args):
+    projects = list_projects()
+    token_in_env = False
+    try:
+        with open(CLAUDE_ENV) as fh:
+            token_in_env = 'CLAUDE_CODE_OAUTH_TOKEN' in fh.read()
+    except OSError:
+        pass
+    return envelope('status', {
+        'servers': [p for p in projects if p['unit'] == 'active' or p['enabled']],
+        'projects': len(projects),
+        'mem': mem_info(),
+        'disk': {'free_gb': round(free_gb(ROOT), 1)},
+        'auth': {'creds': os.path.exists(CREDS), 'token_in_env': token_in_env},
+        'max_servers': MAX_SERVERS,
+    })
+
+
+def cmd_trust(args):
+    """Accept the workspace trust dialog for a project, non-interactively.
+
+    Claude Code stores trust per git repository root in ~/.claude.json and a
+    Remote Control server refuses to start without it. There is no flag for
+    this, so drive the interactive dialog in a scratch tmux socket and verify
+    the key afterwards: other Claude processes rewrite the same file, so a
+    blind edit can be lost.
+    """
+    import time
+    name = args[0] if args else ''
+    path = project_dir(name)
+    if path is None:
+        return envelope('trust', error=f'{name} 프로젝트가 없어요.')
+    if trusted(path):
+        return envelope('trust', {'name': name, 'trusted': True, 'already': True})
+    sock = ['tmux', '-L', 'pocket-trust']
+    run(sock + ['kill-server'])
+    run(sock + ['new-session', '-d', '-s', 'trust', '-x', '120', '-y', '40', '-c', path, 'claude'])
+    time.sleep(TRUST_WAIT)
+    run(sock + ['send-keys', '-t', 'trust', 'Down'])
+    run(sock + ['send-keys', '-t', 'trust', 'Enter'])
+    time.sleep(3)
+    run(sock + ['send-keys', '-t', 'trust', 'Enter'])      # settings warning, if any
+    time.sleep(2)
+    run(sock + ['send-keys', '-t', 'trust', '/exit', 'Enter'])
+    time.sleep(3)
+    run(sock + ['kill-server'])
+    ok = trusted(path)
+    if ok:
+        return envelope('trust', {'name': name, 'trusted': True, 'already': False})
+    return envelope('trust', error=f'{name} 신뢰 수락에 실패했어요. SSM 셸에서 cd {path} && claude 로 직접 수락하세요.')
 
 
 def cmd_check_name(args):
@@ -167,6 +301,10 @@ def cmd_check_name(args):
 VERBS = {
     'list': cmd_list,
     'check-name': cmd_check_name,
+    'up': cmd_up,
+    'down': cmd_down,
+    'trust': cmd_trust,
+    'status': cmd_status,
 }
 
 
