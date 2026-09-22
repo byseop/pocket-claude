@@ -40,4 +40,15 @@ case "$(cat "$HERE/../ec2/claude-rc-wrap.sh")" in
   *) echo "ok   wrapper never exports the OAuth token" ;;
 esac
 
+# Validate session names: rc_valid_name rejects injection attempts and path traversal
+rc_valid_name feat-x; assert_eq "$?" 0 "accepts lowercase with dash"
+rc_valid_name ops; assert_eq "$?" 0 "accepts 'ops'"
+rc_valid_name 'a;b'; assert_eq "$?" 1 "rejects semicolon"
+rc_valid_name 'a b'; assert_eq "$?" 1 "rejects space"
+rc_valid_name '../x'; assert_eq "$?" 1 "rejects path traversal"
+rc_valid_name '$(x)'; assert_eq "$?" 1 "rejects command substitution"
+rc_valid_name 'Feat'; assert_eq "$?" 1 "rejects uppercase"
+rc_valid_name ''; assert_eq "$?" 1 "rejects empty"
+rc_valid_name "$(printf 'a%.0s' {1..25})"; assert_eq "$?" 1 "rejects name longer than 24 chars"
+
 [ "$FAILS" -eq 0 ] && echo "all passed" || { echo "$FAILS failed"; exit 1; }

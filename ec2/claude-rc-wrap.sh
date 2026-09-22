@@ -25,6 +25,13 @@ rc_workdir() {
   if [ "$1" = ops ]; then echo "$REPO"; else echo "$WORKTREES/$1"; fi
 }
 
+# Validate session name: rejects shell injection and path traversal attempts.
+# The name becomes a tmux session ID and is interpolated into shell commands,
+# so this guard is the injection boundary that the sudoers rule creates.
+rc_valid_name() {
+  [[ "$1" =~ ^[a-z0-9-]{1,24}$ ]] && return 0; return 1
+}
+
 rc_command() {
   printf 'claude remote-control --name "gamer4-%s" --spawn same-dir --capacity 2 --permission-mode default --no-chrome' "$1"
 }
@@ -73,6 +80,10 @@ guard_stale_daemon() {
 
 main() {
   local name=${1:?usage: claude-rc-wrap.sh <name>}
+  if ! rc_valid_name "$name"; then
+    logger -t claude-rc-wrap "invalid session name: $name"
+    exit 1
+  fi
   local session="rc-$name"
   local dir
   dir=$(rc_workdir "$name")
