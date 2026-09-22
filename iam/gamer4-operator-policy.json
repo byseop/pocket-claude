@@ -1,0 +1,52 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudFormationRead",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:Describe*",
+        "cloudformation:List*",
+        "cloudformation:GetTemplate",
+        "cloudformation:GetTemplateSummary"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudFormationDeploySyncStack",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateChangeSet",
+        "cloudformation:ExecuteChangeSet",
+        "cloudformation:DeleteChangeSet"
+      ],
+      "Resource": "arn:aws:cloudformation:ap-northeast-2:AWS_ACCOUNT_ID:stack/gamer4-sync/*"
+    },
+    {
+      "Sid": "LambdaSyncFunctions",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:Get*",
+        "lambda:List*",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration"
+      ],
+      "Resource": "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:gamer4-sync-*"
+    },
+    {
+      "Sid": "LogsReadOnly",
+      "Effect": "Allow",
+      "Action": ["logs:Describe*", "logs:Filter*", "logs:Get*"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SamArtifactBucket",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
+      "Resource": [
+        "arn:aws:s3:::aws-sam-cli-managed-default-*",
+        "arn:aws:s3:::aws-sam-cli-managed-default-*/*"
+      ]
+    }
+  ]
+}

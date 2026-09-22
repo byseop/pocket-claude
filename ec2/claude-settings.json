@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Read", "Glob", "Grep",
+      "Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git branch:*)",
+      "Bash(npx vercel ls:*)", "Bash(npx vercel logs:*)", "Bash(npx vercel metrics:*)", "Bash(npx vercel inspect:*)",
+      "Bash(sam logs:*)",
+      "Bash(aws logs:*)", "Bash(aws cloudformation describe-stacks:*)", "Bash(aws cloudformation describe-stack-events:*)",
+      "Bash(curl -s:*)",
+      "Bash(yarn lint:*)", "Bash(yarn verify:*)", "Bash(yarn test:*)"
+    ],
+    "ask": [
+      "Bash(sam deploy:*)",
+      "Bash(yarn deploy:lambda:*)",
+      "Bash(npx vercel promote:*)", "Bash(npx vercel redeploy:*)", "Bash(npx vercel env:*)",
+      "Bash(npx vercel firewall:*)", "Bash(npx vercel api:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(python3:*sb_sql.py*)",
+      "Bash(aws lambda update-function-code:*)", "Bash(aws lambda update-function-configuration:*)",
+      "Bash(aws ec2 stop-instances:*)"
+    ],
+    "deny": [
+      "Bash(aws iam:*)",
+      "Bash(aws ec2 terminate-instances:*)",
+      "Read(./.env)", "Read(./**/.env)",
+      "Read(~/.config/gamer4/secrets.env)", "Read(~/.claude/.credentials.json)"
+    ]
+  },
+  "remoteControlAtStartup": false,
+  "dialogExpiry": 0
+}
