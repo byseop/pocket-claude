@@ -120,7 +120,7 @@ class TestStatusParsing(unittest.TestCase):
         self.assertIn('tmux -L rc-ops capture-pane -t rc-ops', s)
         self.assertIn('CLAUDE_CODE_OAUTH_TOKEN', s)
         self.assertIn('.credentials.json', s)
-        self.assertEqual(s.count('echo ---'), 2)
+        self.assertEqual(s.count('echo ===RC==='), 2)
 
 
 class TestSessions(unittest.TestCase):
@@ -277,6 +277,7 @@ class TestHandlerRouting(unittest.TestCase):
     def setUp(self):
         self.sent = []
         self.ran = []
+        self._chat = os.environ.get('ALLOWED_CHAT_ID')
         self._tg = lf.tg_send
         self._ssm = lf.ssm_run
         self._ready = lf.ssm_ready
@@ -297,6 +298,10 @@ class TestHandlerRouting(unittest.TestCase):
         lf.describe = self._describe
         lf.INSTANCE_ID = self._id
         lf.ec2 = self._ec2
+        if self._chat is None:
+            os.environ.pop('ALLOWED_CHAT_ID', None)
+        else:
+            os.environ['ALLOWED_CHAT_ID'] = self._chat
 
     @staticmethod
     def _event(text, chat_id=111):
@@ -399,12 +404,26 @@ class TestHandlerRouting(unittest.TestCase):
 
     def test_status_reports_units_and_auth(self):
         lf.ssm_run = lambda script, timeout=25: self.ran.append(script) or (
-            'claude-rc@ops.service active\n---\nClaude Code\n---\nCREDS_OK\n'
+            'claude-rc@ops.service active\n===RC===\nClaude Code\n===RC===\nCREDS_OK\n'
         )
         lf.describe = lambda: ('running', datetime.now(timezone.utc))
         lf.lambda_handler(self._event('/status'), None)
         self.assertIn('🟢 claude-rc@ops active', self.sent[0][1])
         self.assertIn('✅ 인증 OK', self.sent[0][1])
+
+    def test_status_reports_incomplete_ssm_output(self):
+        lf.ssm_run = lambda script, timeout=25: self.ran.append(script) or ''
+        lf.describe = lambda: ('running', datetime.now(timezone.utc))
+        lf.lambda_handler(self._event('/status'), None)
+        self.assertIn('SSM', self.sent[0][1])
+        self.assertNotIn('인증 OK', self.sent[0][1])
+
+    def test_new_reports_failure_when_unit_not_active(self):
+        lf.ssm_run = lambda script, timeout=25: (
+            self.ran.append(script) or 'fatal: not a git repository\n'
+        )
+        lf.lambda_handler(self._event('/new t1'), None)
+        self.assertIn('실패', self.sent[0][1])
 
     def test_sessions_lists_rows(self):
         lf.ssm_run = lambda script, timeout=25: self.ran.append(script) or 'ops active main 0\n'

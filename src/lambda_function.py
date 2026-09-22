@@ -30,6 +30,9 @@ ssm = boto3.client('ssm', region_name=AWS_REGION)
 INSTANCE_ID = os.environ.get('INSTANCE_ID', '')
 
 TG_MAX = 3900
+# Block separator for the /status script. A plain '---' also shows up
+# inside the captured pane, which split the output in the wrong place.
+SEP = '===RC==='
 OPS = 'ops'
 UNIT_PREFIX = 'claude-rc@'
 SESSION_PREFIX = 'gamer4-'
@@ -101,7 +104,7 @@ def parse_command(text):
 def validate_name(name):
     """Return an error message for a bad session name, or None when fine."""
     if not name:
-        return '세션 이름이 필요해요. 예: /new feat-x'
+        return '세션 이름이 필요해요. 예: /new feat-x, /kill feat-x'
     if not NAME_RE.fullmatch(name):
         return '이름은 소문자·숫자·하이픈 1~24자만 돼요.'
     if name == OPS:
@@ -159,13 +162,13 @@ def rm_session_script(name):
 
 
 def status_script():
-    """Three '---'-separated blocks: units, ops screen, auth flags."""
+    """Three SEP-separated blocks: units, ops screen, auth flags."""
     return (
         f"systemctl list-units '{UNIT_PREFIX}*' --all --no-legend --plain "
         "| awk '{print $1, $3}' || true\n"
-        'echo ---\n'
+        f'echo {SEP}\n'
         f'sudo -u ubuntu tmux -L rc-{OPS} capture-pane -t rc-{OPS} -p -S -200 2>/dev/null || true\n'
-        'echo ---\n'
+        f'echo {SEP}\n'
         f'grep -q CLAUDE_CODE_OAUTH_TOKEN {CLAUDE_ENV} 2>/dev/null && echo TOKEN_IN_ENV\n'
         f'test -f {CLAUDE_CREDS} && echo CREDS_OK || echo CREDS_MISSING\n'
     )
@@ -304,9 +307,9 @@ def ssm_ready():
 def ssm_run(script, timeout=25):
     """Run a short read-only script and return stdout.
 
-    Only used by /status and /sessions. Never used to launch anything: systemd
-    owns startup now. The timeout ceiling keeps us well under API Gateway's
-    30s integration limit.
+    Used by /status, /sessions, /new, /kill and /rm. Never used to launch
+    Claude itself: systemd owns startup. The timeout ceiling keeps us well
+    under API Gateway's 30s integration limit.
     """
     cid = ssm.send_command(
         InstanceIds=[INSTANCE_ID],
@@ -367,8 +370,13 @@ def cmd_status(chat_id, arg):
         return
 
     out = ssm_run(status_script())
-    units_text, _, rest = out.partition('---')
-    pane, _, flags = rest.partition('---')
+    # An empty or truncated SSM reply used to read as "no units, no auth
+    # error" and print a green check for a box that never answered.
+    if out.count(SEP) < 2:
+        tg_send(chat_id, '⚠️ SSM 응답이 없거나 불완전해요. 잠시 후 /status 를 다시 보내세요.')
+        return
+    units_text, _, rest = out.partition(SEP)
+    pane, _, flags = rest.partition(SEP)
     uptime = format_uptime(launch, datetime.now(timezone.utc))
     tg_send(
         chat_id,
@@ -405,6 +413,14 @@ def cmd_new(chat_id, arg):
     # Wait only for `systemctl start` to return. Whether the session is
     # online is /sessions' job; API Gateway gives us 30s in total.
     out = ssm_run(new_session_script(arg), timeout=20)
+    # The script ends with `systemctl is-active`, so a healthy run says
+    # active/activating. Anything else is the failure that killed it.
+    if 'activ' not in out:
+        tg_send(
+            chat_id,
+            f'⚠️ {SESSION_PREFIX}{arg} 기동 실패:\n{out.strip()[:800] or "(출력 없음)"}',
+        )
+        return
     tg_send(
         chat_id,
         f'🔄 {SESSION_PREFIX}{arg} 기동 중 ({out.strip() or "?"}).\n'
