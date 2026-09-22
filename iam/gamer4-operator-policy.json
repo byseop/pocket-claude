@@ -20,7 +20,10 @@
         "cloudformation:ExecuteChangeSet",
         "cloudformation:DeleteChangeSet"
       ],
-      "Resource": "arn:aws:cloudformation:ap-northeast-2:AWS_ACCOUNT_ID:stack/gamer4-sync/*"
+      "Resource": [
+        "arn:aws:cloudformation:ap-northeast-2:AWS_ACCOUNT_ID:stack/gamer4-sync/*",
+        "arn:aws:cloudformation:ap-northeast-2:aws:transform/Serverless-2016-10-31"
+      ]
     },
     {
       "Sid": "LambdaSyncFunctions",

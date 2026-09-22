@@ -111,4 +111,5 @@ systemctl status claude-rc@ops
 | `/kill t1` | 앱에서 오프라인, `/sessions`에 ⚪ |
 | `/rm t1` | 워크트리 삭제 (변경 있으면 거부) |
 | 폰에서 "sam deploy 해줘" | 폰에 승인 프롬프트, 거부하면 실행 안 됨. **"항상 허용" 누르지 않는다** |
+| 폰에서 "sam deploy 해줘" 승인 | CreateChangeSet 성공 (정책 부족이면 여기서 AccessDenied) |
 | `IDLE_MINUTES=5 ~/idle-watch.sh` 를 6분 간격 2회 | 두 번째에 텔레그램 알림 후 정지 |
