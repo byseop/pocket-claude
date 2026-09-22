@@ -147,6 +147,18 @@ def kill_session_script(name):
     )
 
 
+def rm_session_script(name):
+    d = workdir(name)
+    return as_ubuntu(
+        f'sudo systemctl stop {UNIT_PREFIX}{name}\n'
+        f'if [ -d {d} ]; then\n'
+        f'  if [ -n "$(git -C {d} status --porcelain)" ]; then echo DIRTY; exit 0; fi\n'
+        f'  git -C {REPO} worktree remove {d}\n'
+        'fi\n'
+        'echo REMOVED'
+    )
+
+
 def status_script():
     """Three '---'-separated blocks: units, ops screen, auth flags."""
     return (
@@ -416,6 +428,26 @@ def cmd_kill(chat_id, arg):
     )
 
 
+def cmd_rm(chat_id, arg):
+    err = validate_name(arg)
+    if err:
+        tg_send(chat_id, f'⚠️ {err}')
+        return
+    if not require_running(chat_id):
+        return
+    out = ssm_run(rm_session_script(arg), timeout=20)
+    if 'DIRTY' in out:
+        tg_send(
+            chat_id,
+            f'⚠️ {SESSION_PREFIX}{arg} 워크트리에 커밋 안 된 변경이 있어 삭제하지 않았어요.\n'
+            '세션은 정지했습니다. 앱에서 커밋·푸시한 뒤 다시 /rm.',
+        )
+    elif 'REMOVED' in out:
+        tg_send(chat_id, f'🗑 {SESSION_PREFIX}{arg} 워크트리 삭제. 브랜치는 남아 있어요.')
+    else:
+        tg_send(chat_id, f'⚠️ /rm 결과를 알 수 없어요:\n{out.strip()[:800]}')
+
+
 HELP = (
     'pocket-claude v5\n\n'
     '/start          EC2 켜기 (ops 세션 자동 기동)\n'
@@ -434,6 +466,7 @@ HANDLERS = {
     '/sessions': cmd_sessions,
     '/new': cmd_new,
     '/kill': cmd_kill,
+    '/rm': cmd_rm,
 }
 
 

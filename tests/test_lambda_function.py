@@ -256,6 +256,16 @@ class TestSessionScripts(unittest.TestCase):
         self.assertNotIn('worktree remove', s)
         self.assertIn('|| true', s.splitlines()[-2])
 
+    def test_rm_refuses_dirty_worktree_before_removing(self):
+        s = lf.rm_session_script('t1')
+        self.assertIn('sudo systemctl stop claude-rc@t1', s)
+        self.assertIn('git -C /home/ubuntu/worktrees/t1 status --porcelain', s)
+        self.assertIn('echo DIRTY', s)
+        self.assertIn('git -C /home/ubuntu/gamer4info worktree remove /home/ubuntu/worktrees/t1', s)
+        self.assertIn('echo REMOVED', s)
+        self.assertLess(s.index('echo DIRTY'), s.index('worktree remove'))
+        self.assertNotIn('--force', s)
+
 
 class TestHandlerRouting(unittest.TestCase):
     """The handler must never raise: a crash means Telegram shows nothing."""
@@ -352,6 +362,21 @@ class TestHandlerRouting(unittest.TestCase):
         lf.lambda_handler(self._event('/kill t1'), None)
         self.assertIn('systemctl stop claude-rc@t1', self.ran[0])
         self.assertIn('gamer4-t1', self.sent[0][1])
+
+    def test_rm_ops_is_refused(self):
+        lf.lambda_handler(self._event('/rm ops'), None)
+        self.assertEqual(self.ran, [])
+        self.assertIn('ops', self.sent[0][1])
+
+    def test_rm_dirty_reports_refusal(self):
+        lf.ssm_run = lambda script, timeout=25: self.ran.append(script) or 'DIRTY\n'
+        lf.lambda_handler(self._event('/rm t1'), None)
+        self.assertIn('커밋', self.sent[0][1])
+
+    def test_rm_removed_reports_success(self):
+        lf.ssm_run = lambda script, timeout=25: self.ran.append(script) or 'REMOVED\n'
+        lf.lambda_handler(self._event('/rm t1'), None)
+        self.assertIn('삭제', self.sent[0][1])
 
     def test_view_is_gone(self):
         lf.lambda_handler(self._event('/view'), None)
