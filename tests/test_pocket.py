@@ -378,7 +378,7 @@ class TestTrees(PocketCase):
         d = self.setup_trees(['clean'])
         data = self.json_of(self.run_pocket(
             'prune', 'app', '--json',
-            POCKET_CWDS=str(d / '.claude' / 'worktrees' / 'clean')))
+            POCKET_CWDS=str(d / '.claude' / 'worktrees' / 'clean')))['data']
         self.assertEqual(data['removed'], [])
         self.assertIn('사용 중', data['kept'][0]['reason'])
 
