@@ -1,15 +1,30 @@
 #!/bin/bash
-# Installs the supervisor and systemd unit. Idempotent: safe to re-run.
+# Installs the Remote Control units, wrapper, sudoers and idle watcher, and
+# retires the v4 Telegram channel bot. Idempotent: safe to re-run.
+# Run as root on the instance after copying ec2/* to /tmp.
 set -eu
 
-install -o ubuntu -g ubuntu -m 0755 /tmp/claude-supervise.sh /home/ubuntu/claude-supervise.sh
-install -o ubuntu -g ubuntu -m 0755 /tmp/start-claude-telegram.sh /home/ubuntu/start-claude-telegram.sh
-install -o root -g root -m 0644 /tmp/claude-telegram.service /etc/systemd/system/claude-telegram.service
+install -d -o ubuntu -g ubuntu -m 0755 /home/ubuntu/bin /home/ubuntu/worktrees
+install -o ubuntu -g ubuntu -m 0755 /tmp/claude-rc-wrap.sh /home/ubuntu/bin/claude-rc-wrap.sh
+install -o root -g root -m 0644 /tmp/claude-rc@.service /etc/systemd/system/claude-rc@.service
 
-systemctl daemon-reload
-systemctl enable claude-telegram
+# A syntax error in sudoers locks everyone out of sudo. Validate first.
+visudo -cf /tmp/claude-rc.sudoers
+install -o root -g root -m 0440 /tmp/claude-rc.sudoers /etc/sudoers.d/claude-rc
 
 install -o ubuntu -g ubuntu -m 0755 /tmp/idle-watch.sh /home/ubuntu/idle-watch.sh
+
+# Retire the v4 Telegram channel bot. Its unit must not race the new one.
+if [ -f /etc/systemd/system/claude-telegram.service ]; then
+  systemctl disable --now claude-telegram || true
+  rm -f /etc/systemd/system/claude-telegram.service
+fi
+rm -f /home/ubuntu/claude-supervise.sh /home/ubuntu/start-claude-telegram.sh
+
+systemctl daemon-reload
+# Enable only. The first start is interactive (workspace trust + "Enable
+# Remote Control?"), see docs/SETUP.md; after that `systemctl start` works.
+systemctl enable claude-rc@ops
 
 # Register the cron entry idempotently: drop any previous line, then add ours.
 # The `|| true` matters: with no existing crontab, grep receives zero lines and

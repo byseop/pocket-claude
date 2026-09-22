@@ -1,92 +1,119 @@
 # pocket-claude
 
-Run Claude Code on an EC2 box and drive it from Telegram on your phone.
+Run Claude Code Remote Control sessions on an EC2 box, talk to them from the
+Claude mobile app, and use a tiny Telegram bot as the power switch.
 
-Two bots, two jobs:
+## Why
 
-- **Boot-manager bot** — an AWS Lambda behind API Gateway that turns the EC2 instance on and off and reports its state. It answers even when the instance is powered down, which is the whole point of keeping it outside the box.
-- **Main Claude bot** — the Telegram channel plugin running inside a `claude` session on the instance. This is the one you actually talk to.
-
-They use separate bot tokens because a single token cannot serve a webhook and long polling at the same time.
-
-## Why not just SSH from your phone
-
-Because the instance is off most of the time. Something has to be able to turn it on, and that something cannot live on the instance. The Lambda is that something, and it is deliberately kept as small as possible.
+The instance is off most of the time. Something outside it has to turn it
+on, and that something is a Lambda behind API Gateway. Everything else —
+the conversation, permission prompts, diffs — goes through Anthropic's
+Remote Control channel to the phone app, so the bot never relays chat.
 
 ## Architecture
 
 ```
-[Telegram]
- ├─ @<boot-manager-bot> ──webhook──▶ API Gateway ──▶ Lambda (ec2-boot-manager)
- │     /start /stop /status /view              ├─ ec2:Start/StopInstances
- │                                              └─ ssm:SendCommand  (read-only queries)
- └─ @<main-claude-bot> ──long polling──▶ claude session on EC2
+[Telegram boot bot]  /start /stop /status /sessions /new <name> /kill <name> /rm <name>
+   └─ API GW ─▶ Lambda ec2-boot-manager (v5)
+                 ├─ ec2:StartInstances / StopInstances
+                 └─ ssm:SendCommand   (systemctl start/stop claude-rc@*, read-only queries)
 
-[EC2 instance]
- systemd: claude-telegram.service (Restart=always)
-    └─ claude-supervise.sh
-         └─ tmux 'claude'
-              └─ claude --dangerously-skip-permissions --channels plugin:telegram@claude-plugins-official
- cron (5 min): idle-watch.sh ──▶ stops the instance after 60 idle minutes
+[EC2 (ubuntu)]
+   systemd claude-rc@.service (template)
+     ├─ claude-rc@ops   ~/gamer4info          enabled, starts at boot
+     └─ claude-rc@<x>   ~/worktrees/<x>       created by /new, not enabled
+   each unit: claude-rc-wrap.sh ─▶ tmux rc-<name> ─▶ claude remote-control --name gamer4-<name>
+   cron (5 min): idle-watch.sh ─▶ Telegram notice, then stop after 60 idle minutes
+
+[Claude mobile app] ── Anthropic ── EC2 claude process   (no inbound ports)
 ```
 
-Idle is measured by hashing the tmux screen, so it also checks `~/.claude/jobs/` before shutting down: a `claude --bg` agent can work for an hour while the main pane sits perfectly still, and hashing alone would stop the box and lose that work. A job counts as running only if its state is non-terminal *and* its files were touched recently — `blocked` waits on a human, and a job stuck mid-state would otherwise pin the instance on forever.
-
-The instance starts Claude Code itself via systemd. The Lambda never reaches in to launch anything — it is a power switch and a viewport, nothing more. An earlier version did launch the session remotely over SSM, and every failure mode traced back to that one decision. See the design doc for the post-mortem.
+The Lambda never launches Claude. It flips systemd units; systemd owns the
+process lifetime. An earlier version launched the session remotely over
+SSM and every failure mode traced back to that decision (post-mortem in
+`docs/OPERATIONS.md`).
 
 ## Commands
 
-| Command | What it does | Latency |
-|---|---|---|
-| `/start` | Starts the instance and returns immediately | < 1s |
-| `/stop` | Stops the instance | < 1s |
-| `/status` | Instance state, service health, auth status | 2–3s |
-| `/view` | Current tmux screen, ANSI stripped | 2–3s |
+| Command | What it does |
+|---|---|
+| `/start` | Start the instance. `gamer4-ops` appears in the app about a minute later |
+| `/stop` | Stop the instance. Every session goes offline |
+| `/status` | Instance state, `claude-rc@*` units, auth health |
+| `/sessions` | One line per session: active, branch, last conversation |
+| `/new <name>` | `git worktree add ~/worktrees/<name>` + `systemctl start claude-rc@<name>` |
+| `/kill <name>` | Stop the unit. Worktree and branch stay |
+| `/rm <name>` | Stop, then remove the worktree. Refused if it has uncommitted changes; reports removal failure and a missing worktree separately |
 
-Nothing blocks. This matters: API Gateway's integration timeout is 30 s, and an earlier version that waited on an `instance_running` waiter took 38.7 s and got a 503.
+`<name>` is `[a-z0-9-]{1,24}`; `ops` is reserved. Nothing blocks for long:
+API Gateway allows 30 s and `/new` only waits for `systemctl start`.
+
+## What "ending a session" means
+
+There is no end. A Remote Control session is online while its process
+lives and offline a few seconds after it dies. `/kill` stops one unit;
+`/stop` or the idle watcher stops the box and takes every session with it.
+On the next boot only `ops` comes back. If the box restarts within about
+four hours the server session resumes; later than that it is a new
+session, and continuity lives in the repo's docs (OPERATIONS), not in the
+chat. Commit, push and update OPERATIONS before closing a session.
+
+## Idle detection
+
+The screen hash of v4 is gone: a Remote Control session can be busy while
+the terminal never changes. Activity is any of a written transcript under
+`~/.claude/projects`, a fresh non-terminal `claude --bg` job, or CPU burned
+by a `claude` process since the last sample. Sixty minutes without any of
+them stops the instance after a Telegram notice.
+
+## Permissions
+
+`ec2/claude-settings.json` is the user-level `~/.claude/settings.json`:
+`default` mode, read-only tools allowed, production operations in `ask`
+(they prompt on the phone in every mode, including `auto`), `aws iam` and
+`.env` reads denied. Never press "always allow" on a production prompt: it
+writes an `allow` rule and the gate is gone. Everything in `secrets.env` is
+part of the session's environment, so never ask the session to print `env`;
+the boot bot's token lives in `telegram.env`, which only the idle watcher
+reads.
 
 ## Setup
 
-You need an AWS account, an EC2 instance with the SSM agent, and two Telegram bots from [@BotFather](https://t.me/BotFather).
+`docs/SETUP.md` (Korean) is the one-time checklist: claude.ai login on the
+instance, tool logins, `secrets.env`, settings, the instance-role policy in
+`iam/`, `ec2/install.sh`, and the interactive first start.
 
-1. **Configure the Lambda.** Copy `.env.example` to `.env` and fill it in, then set the same values as environment variables on the `ec2-boot-manager` function. `.env` is gitignored — no identifiers belong in this repository.
-
-2. **IAM.** The Lambda's execution role needs `ec2:Start/Stop/DescribeInstances` and `ssm:SendCommand`, `ssm:GetCommandInvocation`, `ssm:DescribeInstanceInformation`. The instance role needs `AmazonSSMManagedInstanceCore`, plus `ec2:StopInstances` scoped to its own ARN if you want idle auto-shutdown.
-
-3. **Point the webhook at API Gateway.**
-   ```bash
-   curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<api-id>.execute-api.<region>.amazonaws.com/prod/webhook"
-   ```
-
-4. **On the instance**, install `claude-supervise.sh`, the systemd unit, and the idle watcher, then `systemctl enable --now claude-telegram`.
-
-## Auth
-
-See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the full diagnostic runbook — 401 has two
-distinct causes here with very different fixes, and re-issuing the token fixes neither of them.
-
-Claude Code on the instance authenticates with a long-lived OAuth token in `~/.claude/.env`:
-
-```bash
-claude setup-token
-umask 077
-echo 'export CLAUDE_CODE_OAUTH_TOKEN=<token>' > ~/.claude/.env
-sudo systemctl restart claude-telegram
-```
-
-`claude setup-token` issues the token but does **not** write it to `.credentials.json` — you have to export it yourself. When the token is revoked or expires, the bot process stays alive and only the replies fail, which is indistinguishable from a hang unless you look. That is why `/status` reports auth state explicitly.
+Lambda: copy `.env.example` to `.env`, set the same values on the
+`ec2-boot-manager` function, point the bot webhook at API Gateway. The
+execution role needs `ec2:Start/Stop/DescribeInstances`, `ssm:SendCommand`,
+`ssm:GetCommandInvocation`, `ssm:DescribeInstanceInformation`.
 
 ## Layout
 
 ```
-src/lambda_function.py   Lambda handler
-tests/                   unit tests for the pure helpers (no AWS needed)
-ec2/                     supervisor, systemd unit, idle watcher, installer
-iam/                     self-stop policy template
-backup/                  earlier Lambda versions, kept for reference
-docs/OPERATIONS.md       runbook: diagnosis, deployment, incident record
-docs/superpowers/        design and implementation-plan docs
-.env.example             configuration template
+src/lambda_function.py        Lambda handler (v5)
+tests/                        unittest for the Lambda helpers, bash tests for the EC2 scripts
+ec2/claude-rc@.service        systemd template unit
+ec2/claude-rc-wrap.sh         tmux wrapper systemd tracks
+ec2/claude-rc.sudoers         ubuntu may start/stop claude-rc@* only
+ec2/idle-watch.sh             idle watcher
+ec2/install.sh                installer (idempotent)
+ec2/claude-settings.json      ~/.claude/settings.json template
+ec2/secrets.env.example       ~/.config/gamer4/secrets.env template
+ec2/telegram.env.example      ~/.config/gamer4/telegram.env template (idle watcher only)
+ec2-claude-md-patch.md        rules to append to the instance's ~/.claude/CLAUDE.md
+iam/                          instance-role policy templates
+docs/SETUP.md                 one-time setup checklist
+docs/OPERATIONS.md            runbook: diagnosis, deployment, incident record
+docs/superpowers/             design and implementation-plan docs
+```
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests
+bash tests/test_idle_watch.sh
+bash tests/test_claude_rc_wrap.sh
 ```
 
 ## License
