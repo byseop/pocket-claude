@@ -46,6 +46,16 @@ assert_contains "$CMD2" '--capacity 5' "capacity follows POCKET_SESSIONS"
 POCKET_SPAWN=same-dir CMD3=$(rc_command myapp)
 assert_contains "$CMD3" '--spawn same-dir' "spawn mode can be overridden per project"
 
+# A malformed POCKET_SESSIONS must fall back to the default instead of
+# breaking arithmetic expansion or reaching the command tmux runs.
+POCKET_SESSIONS=3abc CMD4=$(rc_command myapp)
+assert_contains "$CMD4" '--capacity 3' "non-numeric POCKET_SESSIONS falls back to default(2)"
+
+# An unrecognized POCKET_SPAWN must fall back to worktree instead of being
+# interpolated verbatim into the command tmux hands to a shell.
+POCKET_SPAWN=bogus CMD5=$(rc_command myapp)
+assert_contains "$CMD5" '--spawn worktree' "unknown POCKET_SPAWN falls back to worktree"
+
 case "$(cat "$HERE/../ec2/claude-rc-wrap.sh")" in
   *'CLAUDE_CODE_OAUTH_TOKEN='*|*'. /home/ubuntu/.claude/.env'*|*'source /home/ubuntu/.claude/.env'*)
     echo "FAIL wrapper must never export or source the OAuth token"; FAILS=$((FAILS + 1)) ;;
@@ -84,6 +94,10 @@ EMPTY_JSON="$TMPDIR_FAKE/empty.json"
 echo '{"projects": {}}' > "$EMPTY_JSON"
 CLAUDE_JSON="$EMPTY_JSON" rc_trusted "$REALDIR"
 assert_eq "$?" 1 "rc_trusted returns 1 when the project is not trusted"
+
+# A missing CLAUDE_JSON must fail closed (untrusted), never crash or pass.
+CLAUDE_JSON="$TMPDIR_FAKE/does-not-exist.json" rc_trusted "$REALDIR"
+assert_eq "$?" 1 "rc_trusted returns non-zero when CLAUDE_JSON is missing"
 
 # main must refuse to start an untrusted workspace: starting it anyway fails
 # immediately and systemd would restart it until the start limit trips.

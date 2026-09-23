@@ -29,10 +29,10 @@ systemctl daemon-reload
 # migration script that creates each project, not here.
 
 # Idle auto-stop was chosen to stay manual: drop any previous cron
-# registration instead of installing one. The `|| true` matters: with no
-# existing crontab, grep receives zero lines and exits 1, and `set -e` would
-# kill the subshell before the echo runs, piping an empty crontab in and
-# wiping whatever was there.
-sudo -u ubuntu crontab -l 2>/dev/null | grep -v 'idle-watch.sh' | sudo -u ubuntu crontab - || true
+# registration instead of installing one. Only rewrite the crontab when one
+# already exists; otherwise this is a no-op, not a fresh empty crontab.
+if sudo -u ubuntu crontab -l >/dev/null 2>&1; then
+  sudo -u ubuntu crontab -l 2>/dev/null | grep -v 'idle-watch.sh' | sudo -u ubuntu crontab -
+fi
 
 echo "installed"

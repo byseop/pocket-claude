@@ -50,9 +50,26 @@ sys.exit(0 if entry.get('hasTrustDialogAccepted') else 1)
 PY
 }
 
+# POCKET_SESSIONS and POCKET_SPAWN come from an operator-edited env file and
+# end up inside a command string tmux hands to a shell. Validate both: a
+# typo should fall back to the default with a log line, never execute.
+rc_sessions() {
+  case "${POCKET_SESSIONS:-2}" in
+    ''|*[!0-9]*) logger -t claude-rc-wrap "invalid POCKET_SESSIONS; using 2"; echo 2 ;;
+    *) echo "${POCKET_SESSIONS:-2}" ;;
+  esac
+}
+
+rc_spawn() {
+  case "${POCKET_SPAWN:-worktree}" in
+    same-dir|worktree|session) echo "${POCKET_SPAWN:-worktree}" ;;
+    *) logger -t claude-rc-wrap "invalid POCKET_SPAWN; using worktree"; echo worktree ;;
+  esac
+}
+
 rc_command() {
   printf 'claude remote-control --name "%s" --spawn %s --capacity %s --permission-mode default --no-chrome' \
-    "$1" "${POCKET_SPAWN:-worktree}" "$(( 1 + ${POCKET_SESSIONS:-2} ))"
+    "$1" "$(rc_spawn)" "$(( 1 + $(rc_sessions) ))"
 }
 
 # An expired .credentials.json used to mask CLAUDE_CODE_OAUTH_TOKEN in the
@@ -115,7 +132,7 @@ main() {
   export PATH="/home/ubuntu/.local/bin:/home/ubuntu/.bun/bin:$PATH"
 
   if [ ! -d "$dir" ]; then
-    logger -t claude-rc-wrap "workdir $dir does not exist for $name"
+    logger -t claude-rc-wrap "workdir $POCKET_ROOT/$name does not exist for $name"
     exit 1
   fi
 
