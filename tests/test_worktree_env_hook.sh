@@ -4,6 +4,8 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 HOOK=$HERE/../ec2/worktree-env-hook.sh
 FAILS=0
+ALL_TMP=()
+trap 'rm -rf "${ALL_TMP[@]}"' EXIT
 
 assert_eq() {
   if [ "$1" = "$2" ]; then echo "ok   $3"
@@ -12,6 +14,7 @@ assert_eq() {
 
 setup() {
   TMP=$(mktemp -d)
+  ALL_TMP+=("$TMP")
   MAIN=$TMP/main
   mkdir -p "$MAIN"
   git -C "$MAIN" init -q
@@ -60,5 +63,18 @@ setup
 OUT2=$( cd "$TMP" && bash "$HOOK" ); RC=$?
 assert_eq "$RC" "0" "exits 0 outside a repo"
 assert_eq "$OUT2" "" "prints nothing outside a repo"
+
+# 7. main checkout subdirectory is untouched
+setup
+mkdir -p "$MAIN/sub/deep"
+(cd "$MAIN/sub/deep" && bash "$HOOK")
+assert_eq "$([ -f "$MAIN/sub/deep/.env" ] && echo yes || echo no)" "no" "main checkout subdirectory is untouched"
+
+# 8. worktree subdirectory still copies to the worktree root
+setup
+mkdir -p "$WT/sub"
+(cd "$WT/sub" && bash "$HOOK")
+assert_eq "$([ -f "$WT/.env" ] && echo yes || echo no)" "yes" "worktree subdirectory still copies to the worktree root"
+assert_eq "$([ -f "$WT/sub/.env" ] && echo yes || echo no)" "no" "worktree subdirectory still copies to the worktree root"
 
 [ "$FAILS" -eq 0 ] && echo "all passed" || { echo "$FAILS failed"; exit 1; }
