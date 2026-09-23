@@ -119,9 +119,16 @@ class TestPocketBridge(unittest.TestCase):
         self.assertIn('응답', r['error'])
 
     def test_parse_reports_truncated_output(self):
-        out = '===POCKET-BEGIN===\n{"ok": true, ' + 'x' * 10
+        body = '{"ok": true, "verb": "list", "data": {"projects": []}}'
+        out = f'{lf.BEGIN}\n{body}\n{lf.END}\n' + 'x' * lf.SSM_STDOUT_LIMIT
         r = lf.parse_pocket(out)
         self.assertFalse(r['ok'])
+        self.assertIn('잘렸', r['error'])
+
+    def test_parse_reports_missing_sentinels(self):
+        r = lf.parse_pocket('boom: command not found')
+        self.assertFalse(r['ok'])
+        self.assertIn('응답', r['error'])
 
     def test_format_projects_marks_running(self):
         rows = [{'name': 'a', 'unit': 'active', 'branch': 'main', 'last_activity': 0,
@@ -159,6 +166,12 @@ class TestPocketBridge(unittest.TestCase):
         }
         out = lf.format_status(data, '1m')
         self.assertIn('CLAUDE_CODE_OAUTH_TOKEN', out)
+        # Recovery steps for a leftover token don't need a fresh login: the
+        # concrete restart command is what proves the block was appended, not
+        # just the problem line (which already mentions ".env").
+        self.assertIn('복구', out)
+        self.assertIn('systemctl restart claude-rc@', out)
+        self.assertNotIn('claude auth login', out)
 
     def test_format_status_flags_missing_creds(self):
         data = {
@@ -167,7 +180,11 @@ class TestPocketBridge(unittest.TestCase):
             'projects': 0, 'max_servers': 2,
         }
         out = lf.format_status(data, '1m')
+        # The problem line alone already says "claude auth login"; the real
+        # regression check is that the concrete recovery block follows it.
+        self.assertIn('복구', out)
         self.assertIn('claude auth login', out)
+        self.assertIn('pocket up', out)
 
     def test_format_trees_lists_branches_and_marks(self):
         data = {'name': 'a', 'trees': [
@@ -274,6 +291,12 @@ class TestHandlerRouting(unittest.TestCase):
         self.assertIn('⚠️', self.sent[0][1])
         self.assertIn('박스 문제', self.sent[0][1])
 
+    def test_projects_when_ssm_not_ready_does_not_call_ssm(self):
+        lf.ssm_ready = lambda: False
+        lf.lambda_handler(self._event('/projects'), None)
+        self.assertEqual(self.ran, [])
+        self.assertTrue(self.sent)
+
     def test_up_with_bad_name_replies_without_ssm(self):
         lf.lambda_handler(self._event('/up Bad;Name'), None)
         self.assertEqual(self.ran, [])
@@ -290,6 +313,12 @@ class TestHandlerRouting(unittest.TestCase):
         lf.lambda_handler(self._event('/up t1'), None)
         self.assertIn('⚠️', self.sent[0][1])
         self.assertIn('신뢰 필요', self.sent[0][1])
+
+    def test_up_when_instance_stopped_does_not_call_ssm(self):
+        lf.describe = lambda: ('stopped', None)
+        lf.lambda_handler(self._event('/up myapp'), None)
+        self.assertEqual(self.ran, [])
+        self.assertIn('/start', self.sent[0][1])
 
     def test_down_runs_pocket_verb_and_reports_success(self):
         lf.ssm_run = lambda script, timeout=25: self.ran.append(script) or envelope_text(True, {'name': 't1', 'unit': 'inactive'})

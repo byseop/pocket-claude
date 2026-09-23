@@ -42,6 +42,17 @@ SSM_STDOUT_LIMIT = 24000
 # guard; `pocket` checks the same rule again once the value reaches the box.
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,23}$')
 
+RECOVERY_TOKEN = (
+    '   복구 (SSM 셸, ubuntu 사용자):\n'
+    '   1. ~/.claude/.env 에서 CLAUDE_CODE_OAUTH_TOKEN 줄 제거\n'
+    '   2. sudo systemctl restart claude-rc@<프로젝트>'
+)
+RECOVERY_LOGIN = (
+    '   복구 (SSM 셸, ubuntu 사용자):\n'
+    '   1. claude auth login   (claude.ai 선택)\n'
+    '   2. pocket up <프로젝트>'
+)
+
 
 # --- pure helpers (unit tested, no AWS) ----------------------------------
 
@@ -141,8 +152,10 @@ def format_status(data, uptime):
     lines.append(f"메모리 여유 {mem['available_mb']}MB / {mem['total_mb']}MB · 디스크 여유 {disk['free_gb']}GB")
     if auth['token_in_env']:
         lines.append('❌ ~/.claude/.env 에 CLAUDE_CODE_OAUTH_TOKEN 이 남아 있어요 (Remote Control 차단)')
+        lines.append(RECOVERY_TOKEN)
     elif not auth['creds']:
-        lines.append('❌ claude.ai 로그인이 없어요 — SSM 셸에서 claude auth login')
+        lines.append('❌ claude.ai 로그인이 없어요')
+        lines.append(RECOVERY_LOGIN)
     else:
         lines.append('✅ 인증 OK')
     return '\n'.join(lines)
