@@ -32,6 +32,12 @@ v6(멀티 프로젝트)의 설계는 [범용화 설계 문서](superpowers/specs
 | `/trees <p>` | 그 프로젝트의 세션 워크트리 목록(미커밋·미푸시·잠김·사용중 표시) | 2~3초 |
 
 `<p>`는 `[a-z0-9][a-z0-9-]{0,23}`이고 `~/work/<p>` 링크가 있어야 프로젝트로 인식된다.
+`/projects`의 "워크트리 N"과 `/trees`의 목록은 같은 모집단이다 — `<리포>/.claude/
+worktrees/` 안의 세션 워크트리만 센다. 사용자가 직접 만든 워크트리는 `pocket`이
+건드리지 않으므로 어느 쪽에도 나오지 않는다(`git worktree list`로 본다).
+`/status`의 "서버 동시 한도"는 동시에 켤 수 있는 **프로젝트 서버** 수
+(`POCKET_MAX_SERVERS`, 기본 2)다. 한 프로젝트 안의 동시 세션 수(`1 + POCKET_SESSIONS`,
+앱에 `capacity N/M`으로 보이는 값)와는 다른 값이다.
 `pocket prune <p>`(텔레그램 명령 아님, SSM 셸에서 직접)는 미커밋·미푸시·잠금·사용중
 어느 것도 아닌 워크트리만 지운다. SSM 스크립트는 `sudo -u ubuntu`로 돌고 sudoers는
 `systemctl start|stop|restart|enable|disable|reset-failed claude-rc@*`만 허용한다.

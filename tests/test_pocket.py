@@ -354,6 +354,21 @@ class TestTrees(PocketCase):
         self.assertEqual(sorted(t['branch'] for t in trees),
                          ['worktree-clean', 'worktree-dirty'])
 
+    def test_list_counts_the_same_worktrees_as_trees(self):
+        # /projects prints this count and /trees lists the worktrees behind
+        # it. Counting a hand-made worktree here - one trees and prune never
+        # touch - makes the two screens disagree with no way to tell why.
+        self.setup_trees(['clean'])
+        outside = self.root / 'elsewhere' / 'by-hand'
+        outside.mkdir(parents=True)
+        lines = (self.state / 'worktrees.txt').read_text().splitlines()
+        lines += [f'worktree {outside}', 'branch refs/heads/feat/x', '']
+        (self.state / 'worktrees.txt').write_text('\n'.join(lines))
+        p = self.json_of(self.run_pocket('list', '--json'))['data']['projects'][0]
+        trees = self.json_of(self.run_pocket('trees', 'app', '--json'))['data']['trees']
+        self.assertEqual(p['worktrees'], 1)
+        self.assertEqual(p['worktrees'], len(trees))
+
     def test_trees_flags_dirty_and_unpushed(self):
         self.setup_trees(['clean', 'dirty', 'unpushed'])
         by = {t['branch']: t for t in self.json_of(self.run_pocket('trees', 'app', '--json'))['data']['trees']}

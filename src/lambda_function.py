@@ -148,7 +148,7 @@ def format_status(data, uptime):
             lines.append(f"{dot} {s['name']} {s['unit']}")
     else:
         lines.append('⚪ 켜진 서버 없음')
-    lines.append(f"프로젝트 {data['projects']}개 · 동시 한도 {data['max_servers']}")
+    lines.append(f"프로젝트 {data['projects']}개 · 서버 동시 한도 {data['max_servers']}")
     lines.append(f"메모리 여유 {mem['available_mb']}MB / {mem['total_mb']}MB · 디스크 여유 {disk['free_gb']}GB")
     if auth['token_in_env']:
         lines.append('❌ ~/.claude/.env 에 CLAUDE_CODE_OAUTH_TOKEN 이 남아 있어요 (Remote Control 차단)')
