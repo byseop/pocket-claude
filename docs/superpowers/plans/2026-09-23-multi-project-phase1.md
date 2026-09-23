@@ -1363,9 +1363,11 @@ class TestPocketBridge(unittest.TestCase):
         self.assertIn('응답', r['error'])
 
     def test_parse_reports_truncated_output(self):
-        out = '===POCKET-BEGIN===\n{"ok": true, ' + 'x' * 10
+        body = '{"ok": true, "verb": "list", "data": {"projects": []}}'
+        out = f'{lf.BEGIN}\n{body}\n{lf.END}\n' + 'x' * lf.SSM_STDOUT_LIMIT
         r = lf.parse_pocket(out)
         self.assertFalse(r['ok'])
+        self.assertIn('잘렸', r['error'])
 
     def test_format_projects_marks_running(self):
         rows = [{'name': 'a', 'unit': 'active', 'branch': 'main', 'last_activity': 0,
@@ -1393,6 +1395,17 @@ Expected: `pocket_script`·`parse_pocket` 부재로 ERROR.
 POCKET = '/home/ubuntu/bin/pocket'
 BEGIN, END = '===POCKET-BEGIN===', '===POCKET-END==='
 SSM_STDOUT_LIMIT = 24000
+
+RECOVERY_TOKEN = (
+    '   복구 (SSM 셸, ubuntu 사용자):\n'
+    '   1. ~/.claude/.env 에서 CLAUDE_CODE_OAUTH_TOKEN 줄 제거\n'
+    '   2. sudo systemctl restart claude-rc@<프로젝트>'
+)
+RECOVERY_LOGIN = (
+    '   복구 (SSM 셸, ubuntu 사용자):\n'
+    '   1. claude auth login   (claude.ai 선택)\n'
+    '   2. pocket up <프로젝트>'
+)
 
 
 def pocket_script(verb, *args):
@@ -1465,10 +1478,14 @@ def format_status(data, uptime):
         lines.append('⚪ 켜진 서버 없음')
     lines.append(f"프로젝트 {data['projects']}개 · 동시 한도 {data['max_servers']}")
     lines.append(f"메모리 여유 {mem['available_mb']}MB / {mem['total_mb']}MB · 디스크 여유 {disk['free_gb']}GB")
+    # State the problem *and* the next action: on a phone this message is the
+    # only place the recovery steps can appear.
     if auth['token_in_env']:
         lines.append('❌ ~/.claude/.env 에 CLAUDE_CODE_OAUTH_TOKEN 이 남아 있어요 (Remote Control 차단)')
+        lines.append(RECOVERY_TOKEN)
     elif not auth['creds']:
-        lines.append('❌ claude.ai 로그인이 없어요 — SSM 셸에서 claude auth login')
+        lines.append('❌ claude.ai 로그인이 없어요')
+        lines.append(RECOVERY_LOGIN)
     else:
         lines.append('✅ 인증 OK')
     return '\n'.join(lines)
