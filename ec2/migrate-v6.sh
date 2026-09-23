@@ -104,7 +104,9 @@ echo "== 6. ~/.claude/settings.json =="
 if [ ! -f "$TEMPLATE" ]; then
   echo "skip: $TEMPLATE not found -- copy ec2/claude-settings.json to /tmp and re-run" >&2
 else
-  install -d -o ubuntu -g ubuntu -m 0755 "$HOME_DIR/.claude"
+  # Create it only. install -d re-chmods a directory that already exists, so
+  # a ~/.claude deliberately kept at 0700 would be widened to 0755.
+  [ -d "$HOME_DIR/.claude" ] || install -d -o ubuntu -g ubuntu -m 0755 "$HOME_DIR/.claude"
   # Back up once. A second run must not overwrite the v5 original with the
   # already-merged file.
   if [ -e "${SETTINGS}.v5.bak" ]; then
@@ -121,7 +123,7 @@ else
   # overwritten, so dropping one from the template stops forcing it instead
   # of deleting it here. Re-running rewrites the same values.
   if python3 - "$TEMPLATE" "$SETTINGS" <<'PY'
-import json, os, sys
+import json, os, stat, sys
 
 template_path, settings_path = sys.argv[1], sys.argv[2]
 with open(template_path) as fh:
@@ -144,13 +146,17 @@ tmp = settings_path + '.tmp'
 with open(tmp, 'w') as fh:
     json.dump(merged, fh, indent=2, ensure_ascii=False)
     fh.write('\n')
+# Keep the mode the box chose; only a brand new file gets one from here.
+try:
+    os.chmod(tmp, stat.S_IMODE(os.stat(settings_path).st_mode))
+except FileNotFoundError:
+    os.chmod(tmp, 0o644)
 os.replace(tmp, settings_path)
 print('from template: ' + ', '.join(sorted(template)))
 print('kept as-is:    ' + (', '.join(kept) or '(none)'))
 PY
   then
     chown ubuntu:ubuntu "$SETTINGS"
-    chmod 644 "$SETTINGS"
     echo "ok: $SETTINGS"
   else
     echo "skip: settings.json not merged (see the message above)" >&2
