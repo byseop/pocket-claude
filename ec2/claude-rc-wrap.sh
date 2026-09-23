@@ -4,9 +4,10 @@
 # tmux server daemonizes itself (double fork + setsid), systemd loses the
 # PID, decides the service died, and Restart= spins forever.
 #
-# Usage: claude-rc-wrap.sh <name>     (systemd passes %i)
-#   ops    -> /home/ubuntu/gamer4info        (main checkout, enabled at boot)
-#   other  -> /home/ubuntu/worktrees/<name>  (git worktree, started by /new)
+# Usage: claude-rc-wrap.sh <name>     (systemd passes %i, the project name)
+#   The project's working directory is resolved under POCKET_ROOT, e.g.
+#   POCKET_ROOT=/home/ubuntu/work -> /home/ubuntu/work/<name> (a symlink or
+#   a plain directory, either way a git repo).
 #
 # The OAuth token in ~/.claude/.env is deliberately NOT sourced here. Remote
 # Control refuses to start when CLAUDE_CODE_OAUTH_TOKEN is set ("API-key auth
@@ -15,13 +16,17 @@
 
 set -u
 
-REPO=/home/ubuntu/gamer4info
-WORKTREES=/home/ubuntu/worktrees
+POCKET_ROOT=${POCKET_ROOT:-/home/ubuntu/work}
+CLAUDE_JSON=${POCKET_CLAUDE_JSON:-/home/ubuntu/.claude.json}
 CREDS=/home/ubuntu/.claude/.credentials.json
 ENV_FILE=/home/ubuntu/.claude/.env
 
+# Trust, transcripts and session resume are all keyed on the real path, so a
+# symlinked project must resolve before anything else uses the path.
 rc_workdir() {
-  if [ "$1" = ops ]; then echo "$REPO"; else echo "$WORKTREES/$1"; fi
+  local p="$POCKET_ROOT/$1"
+  [ -d "$p" ] || return 1
+  (cd "$p" && pwd -P)
 }
 
 # Validate session name: rejects shell injection and path traversal attempts.
@@ -31,8 +36,23 @@ rc_valid_name() {
   [[ "$1" =~ ^[a-z0-9-]{1,24}$ ]] && return 0; return 1
 }
 
+# A server refuses to start in an untrusted directory and systemd would then
+# restart it until the start limit trips, so check first and fail loudly.
+rc_trusted() {
+  python3 - "$CLAUDE_JSON" "$1" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+entry = (data.get('projects') or {}).get(sys.argv[2]) or {}
+sys.exit(0 if entry.get('hasTrustDialogAccepted') else 1)
+PY
+}
+
 rc_command() {
-  printf 'claude remote-control --name "gamer4-%s" --spawn same-dir --capacity 2 --permission-mode default --no-chrome' "$1"
+  printf 'claude remote-control --name "%s" --spawn %s --capacity %s --permission-mode default --no-chrome' \
+    "$1" "${POCKET_SPAWN:-worktree}" "$(( 1 + ${POCKET_SESSIONS:-2} ))"
 }
 
 # An expired .credentials.json used to mask CLAUDE_CODE_OAUTH_TOKEN in the
@@ -96,6 +116,11 @@ main() {
 
   if [ ! -d "$dir" ]; then
     logger -t claude-rc-wrap "workdir $dir does not exist for $name"
+    exit 1
+  fi
+
+  if ! rc_trusted "$dir"; then
+    logger -t claude-rc-wrap "workspace not trusted: $dir (run: pocket trust $name)"
     exit 1
   fi
 

@@ -14,13 +14,14 @@ Environment=HOME=/home/ubuntu
 # tools. Everything here becomes part of the session's environment, so keep
 # out anything the session must not read. The leading "-" keeps the unit
 # bootable when the file is missing. Never put CLAUDE_CODE_OAUTH_TOKEN here.
-EnvironmentFile=-/home/ubuntu/.config/gamer4/secrets.env
+EnvironmentFile=-/home/ubuntu/.config/pocket-claude/projects/%i.env
 ExecStart=/home/ubuntu/bin/claude-rc-wrap.sh %i
 # One tmux server per unit (socket rc-%i): keeps each session in its own cgroup.
 ExecStop=/usr/bin/tmux -L rc-%i kill-session -t rc-%i
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
+Slice=claude-rc.slice
 
 [Install]
 WantedBy=multi-user.target

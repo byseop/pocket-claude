@@ -23,16 +23,28 @@ assert_contains() {
   esac
 }
 
-assert_eq "$(rc_workdir ops)" "/home/ubuntu/gamer4info" "ops runs in the main checkout"
-assert_eq "$(rc_workdir feat-x)" "/home/ubuntu/worktrees/feat-x" "other names run in a worktree"
+# A fake POCKET_ROOT with one project, so rc_workdir/rc_command/rc_trusted
+# can be exercised without touching the real box layout.
+TMPDIR_FAKE=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_FAKE"' EXIT
 
-CMD=$(rc_command feat-x)
-assert_contains "$CMD" 'claude remote-control' "command is the server mode"
-assert_contains "$CMD" '--name "gamer4-feat-x"' "session name carries the gamer4 prefix"
-assert_contains "$CMD" '--spawn same-dir' "spawn mode is same-dir"
-assert_contains "$CMD" '--capacity 2' "capacity is capped at 2"
-assert_contains "$CMD" '--permission-mode default' "permission mode is default"
-assert_contains "$CMD" '--no-chrome' "chrome is off"
+export POCKET_ROOT="$TMPDIR_FAKE/work"
+mkdir -p "$POCKET_ROOT/myapp/.git"
+assert_eq "$(rc_workdir myapp)" "$(cd "$POCKET_ROOT/myapp" && pwd -P)" "workdir resolves under POCKET_ROOT"
+
+CMD=$(rc_command myapp)
+assert_contains "$CMD" 'claude remote-control' "server mode"
+assert_contains "$CMD" '--name "myapp"' "session name is the project name"
+assert_contains "$CMD" '--spawn worktree' "spawn mode defaults to worktree"
+assert_contains "$CMD" '--capacity 3' "capacity is 1 + POCKET_SESSIONS(2)"
+assert_contains "$CMD" '--permission-mode default' "permission mode"
+assert_contains "$CMD" '--no-chrome' "chrome off"
+
+POCKET_SESSIONS=4 CMD2=$(rc_command myapp)
+assert_contains "$CMD2" '--capacity 5' "capacity follows POCKET_SESSIONS"
+
+POCKET_SPAWN=same-dir CMD3=$(rc_command myapp)
+assert_contains "$CMD3" '--spawn same-dir' "spawn mode can be overridden per project"
 
 case "$(cat "$HERE/../ec2/claude-rc-wrap.sh")" in
   *'CLAUDE_CODE_OAUTH_TOKEN='*|*'. /home/ubuntu/.claude/.env'*|*'source /home/ubuntu/.claude/.env'*)
@@ -53,9 +65,29 @@ rc_valid_name "$(printf 'a%.0s' {1..25})"; assert_eq "$?" 1 "rejects name longer
 
 # Every tmux call in main must name the per-unit socket rc-<name>, so each
 # unit owns its own tmux server (cgroup isolation + its own EnvironmentFile).
-SOCKETS=$(grep -c 'tmux -L "rc-\$name"' "$HERE/../ec2/claude-rc-wrap.sh")
+SOCKETS=$(grep -c 'tmux -L "rc-$name"' "$HERE/../ec2/claude-rc-wrap.sh")
 [ "$SOCKETS" -ge 3 ] \
   && echo "ok   every tmux call uses the per-unit socket" \
   || { echo "FAIL expected >=3 'tmux -L \"rc-\$name\"' calls, got $SOCKETS"; FAILS=$((FAILS + 1)); }
+
+# rc_trusted reads the project's real path from POCKET_CLAUDE_JSON.
+REALDIR=$(rc_workdir myapp)
+
+TRUSTED_JSON="$TMPDIR_FAKE/trusted.json"
+cat > "$TRUSTED_JSON" <<JSON
+{"projects": {"$REALDIR": {"hasTrustDialogAccepted": true}}}
+JSON
+CLAUDE_JSON="$TRUSTED_JSON" rc_trusted "$REALDIR"
+assert_eq "$?" 0 "rc_trusted returns 0 for a trusted project"
+
+EMPTY_JSON="$TMPDIR_FAKE/empty.json"
+echo '{"projects": {}}' > "$EMPTY_JSON"
+CLAUDE_JSON="$EMPTY_JSON" rc_trusted "$REALDIR"
+assert_eq "$?" 1 "rc_trusted returns 1 when the project is not trusted"
+
+# main must refuse to start an untrusted workspace: starting it anyway fails
+# immediately and systemd would restart it until the start limit trips.
+( CLAUDE_JSON="$EMPTY_JSON" main myapp )
+assert_eq "$?" 1 "main exits 1 for an untrusted workspace"
 
 [ "$FAILS" -eq 0 ] && echo "all passed" || { echo "$FAILS failed"; exit 1; }
