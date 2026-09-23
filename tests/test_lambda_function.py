@@ -191,6 +191,18 @@ class TestPocketBridge(unittest.TestCase):
         self.assertIn('systemctl restart claude-rc@', out)
         self.assertNotIn('claude auth login', out)
 
+    def test_recovery_token_names_a_service_unit(self):
+        # ec2/claude-rc.sudoers only matches claude-rc@<name>.service, so a
+        # unit name without the suffix is a command sudo refuses to run.
+        for line in lf.RECOVERY_TOKEN.splitlines():
+            if 'systemctl' not in line:
+                continue
+            unit = line.split('claude-rc@', 1)[1].split()[0]
+            self.assertTrue(
+                unit.endswith('.service'),
+                f'unit name must end in .service: claude-rc@{unit}',
+            )
+
     def test_format_status_flags_missing_creds(self):
         data = {
             'mem': {'available_mb': 1, 'total_mb': 1}, 'disk': {'free_gb': 1},

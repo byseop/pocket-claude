@@ -45,7 +45,7 @@ NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,23}$')
 RECOVERY_TOKEN = (
     '   복구 (SSM 셸, ubuntu 사용자):\n'
     '   1. ~/.claude/.env 에서 CLAUDE_CODE_OAUTH_TOKEN 줄 제거\n'
-    '   2. sudo systemctl restart claude-rc@<프로젝트>'
+    '   2. sudo systemctl restart claude-rc@<프로젝트>.service'
 )
 RECOVERY_LOGIN = (
     '   복구 (SSM 셸, ubuntu 사용자):\n'

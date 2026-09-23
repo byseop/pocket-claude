@@ -62,7 +62,7 @@ precedence"로 서버 기동 자체가 거부된다. `/status`가 이 두 경우
 
 | `/status` 표시 | 원인 | 조치 |
 |---|---|---|
-| `.env 에 CLAUDE_CODE_OAUTH_TOKEN 이 남아 있어요` | 토큰 잔존 | `.env`에서 줄 제거 후 `sudo systemctl restart claude-rc@<프로젝트>` |
+| `.env 에 CLAUDE_CODE_OAUTH_TOKEN 이 남아 있어요` | 토큰 잔존 | `.env`에서 줄 제거 후 `sudo systemctl restart claude-rc@<프로젝트>.service` |
 | `claude.ai 로그인이 없어요` | `.credentials.json` 없음 | `claude auth login` (대화형, SSM 셸) |
 | `401 ...` 화면 스캔 | 리프레시 토큰 만료 | `claude auth login` 후 재시작 |
 
@@ -117,7 +117,7 @@ print(t, '->', '만료' if t < datetime.datetime.now() else '유효')"
 
 ```bash
 mv ~/.claude/.credentials.json ~/.claude/.credentials.json.expired
-sudo systemctl restart claude-rc@<프로젝트>
+sudo systemctl restart claude-rc@<프로젝트>.service
 ```
 
 **자동화되어 있다.** `ec2/claude-rc-wrap.sh`가 기동 시 만료 여부를 확인해 만료된
@@ -162,14 +162,14 @@ mtime(파일이 없으면 `.env`로 폴백)을 비교해, 자격증명이 더 �
 
 ```bash
 claude auth login           # 브라우저 인증 필요. 봇이 대신 못 한다
-sudo systemctl restart claude-rc@<프로젝트>
+sudo systemctl restart claude-rc@<프로젝트>.service
 ```
 
 ## 서비스 관리
 
 ```bash
 systemctl list-units 'claude-rc@*' --all
-systemctl restart claude-rc@<프로젝트>
+sudo systemctl restart claude-rc@<프로젝트>.service
 journalctl -u claude-rc@<프로젝트> -n 50
 sudo -u ubuntu tmux -L rc-<프로젝트> ls          # 유닛마다 소켓 rc-<p>, 세션 이름도 rc-<p>
 grep claude-rc-wrap /var/log/syslog | tail      # 가드 동작 기록
