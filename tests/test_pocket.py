@@ -323,9 +323,13 @@ case "$*" in
   *"rev-parse --abbrev-ref HEAD"*) echo "${FAKE_BRANCH:-main}" ;;
   *"status --porcelain"*)
       case "$*" in *dirty*) echo " M f.txt" ;; *) : ;; esac ;;
-  *"log --oneline @{u}..HEAD"*)
-      case "$*" in *unpushed*) echo "abc1234 wip" ;; *) : ;; esac ;;
-  *"branch --merged"*) echo "  worktree-clean" ;;
+  *"log --oneline"*)
+      case "$*" in
+        *noremote*) exit 1 ;;
+        *unpushed*) echo "abc1234 wip" ;;
+        *) : ;;
+      esac ;;
+  *"branch --merged"*) echo "+ worktree-clean" ;;
   *"worktree remove"*) echo "removed" ;;
   *) : ;;
 esac
@@ -381,6 +385,28 @@ class TestTrees(PocketCase):
             POCKET_CWDS=str(d / '.claude' / 'worktrees' / 'clean')))['data']
         self.assertEqual(data['removed'], [])
         self.assertIn('사용 중', data['kept'][0]['reason'])
+
+    def test_trees_marks_unpushed_when_git_cannot_tell(self):
+        # Both log forms fail for a "noremote" worktree; a failed check must
+        # never look identical to "nothing unpushed".
+        self.setup_trees(['noremote'])
+        trees = self.json_of(self.run_pocket('trees', 'app', '--json'))['data']['trees']
+        by = {t['branch']: t for t in trees}
+        self.assertTrue(by['worktree-noremote']['unpushed'])
+
+    def test_prune_keeps_tree_when_push_state_unknown(self):
+        self.setup_trees(['noremote'])
+        data = self.json_of(self.run_pocket('prune', 'app', '--json'))['data']
+        self.assertEqual(data['removed'], [])
+        self.assertIn('미푸시', data['kept'][0]['reason'])
+
+    def test_prune_deletes_merged_branch_with_plus_prefix(self):
+        # Real git prefixes a branch checked out in another worktree with
+        # '+', not '*'; the merged-branch parser must strip that too.
+        self.setup_trees(['clean'])
+        self.run_pocket('prune', 'app', '--json')
+        log = (self.state / 'git.log').read_text()
+        self.assertIn('branch -d worktree-clean', log)
 
 
 if __name__ == '__main__':
