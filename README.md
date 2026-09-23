@@ -117,7 +117,7 @@ ec2/install.sh                installer (idempotent)
 ec2/migrate-v6.sh             one-time v5 -> v6 migration (idempotent)
 ec2/idle-watch.sh             idle watcher, kept but not registered (see docs/OPERATIONS.md)
 ec2/claude-settings.json      ~/.claude/settings.json template
-ec2/secrets.env.example       ~/.config/pocket-claude/secrets.env template
+ec2/project.env.example       ~/.config/pocket-claude/projects/<project>.env template
 ec2/telegram.env.example      ~/.config/pocket-claude/telegram.env template (currently unused)
 ec2-claude-md-patch.md        rules to append to the instance's ~/.claude/CLAUDE.md
 iam/                          instance-role policy templates

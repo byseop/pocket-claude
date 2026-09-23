@@ -46,26 +46,31 @@ claude doctor          # "Remote Control" 항목 확인. 키 입력으로 종료
 ## 2. 도구 로그인
 
 ```bash
-gh auth login                                   # 또는 secrets.env 의 GH_TOKEN
-npx vercel login                                # 또는 secrets.env 의 VERCEL_TOKEN
+gh auth login                                   # 한 번 하면 모든 세션이 쓴다
+npx vercel login                                # 한 번 하면 모든 세션이 쓴다
 cd ~/work/myapp && npx vercel link              # 프로젝트별로 필요할 때
 ```
 
-## 3. secrets.env · telegram.env
+`gh`·`vercel`은 각 CLI가 자격증명을 자기 파일에 저장하므로 `GH_TOKEN`·`VERCEL_TOKEN`
+환경변수는 필요 없다. 토큰을 굳이 환경변수로 넣어야 하는 도구만 3단계로 간다.
+
+## 3. 프로젝트별 env · telegram.env
+
+공통 비밀 파일은 두지 않는다. 세션 환경으로 올라가는 값은 프로젝트별 env 파일
+하나뿐이고, 유닛의 `EnvironmentFile=-…/projects/%i.env`가 그 프로젝트에만 적용한다.
+그 프로젝트에 필요한 값이 없으면 파일 자체를 만들지 않아도 된다.
 
 ```bash
-umask 077; mkdir -p ~/.config/pocket-claude
-cp /tmp/secrets.env.example ~/.config/pocket-claude/secrets.env     # 리포 ec2/secrets.env.example
-cp /tmp/telegram.env.example ~/.config/pocket-claude/telegram.env   # 리포 ec2/telegram.env.example
-vi ~/.config/pocket-claude/secrets.env      # GH_TOKEN, VERCEL_TOKEN 등(맥 키체인 값)
-vi ~/.config/pocket-claude/telegram.env     # 현재 미사용(수동 정지 결정). 되살릴 때를 위해 둔다
-chmod 600 ~/.config/pocket-claude/secrets.env ~/.config/pocket-claude/telegram.env
+umask 077; mkdir -p ~/.config/pocket-claude/projects
+cp /tmp/project.env.example ~/.config/pocket-claude/projects/myapp.env   # 리포 ec2/project.env.example
+cp /tmp/telegram.env.example ~/.config/pocket-claude/telegram.env        # 리포 ec2/telegram.env.example
+vi ~/.config/pocket-claude/projects/myapp.env   # 이 프로젝트에만 필요한 값(SUPABASE_ACCESS_TOKEN, AWS_PROFILE, POCKET_SESSIONS 등)
+vi ~/.config/pocket-claude/telegram.env         # 현재 미사용(수동 정지 결정). 되살릴 때를 위해 둔다
+chmod 600 ~/.config/pocket-claude/projects/myapp.env ~/.config/pocket-claude/telegram.env
 ```
 
-`secrets.env`는 `claude-rc@.service`가 모든 프로젝트의 세션 환경변수로 올리므로 거기
-넣은 값은 세션이 `env`로 볼 수 있다. 프로젝트마다 다른 값(동시 세션 수, `AWS_PROFILE`
-등)이 필요하면 `~/.config/pocket-claude/projects/<이름>.env`에 따로 둔다 — 유닛의
-`EnvironmentFile=-…/projects/%i.env`가 그 프로젝트에만 적용한다.
+여기 넣은 값은 그 프로젝트 세션이 `env`로 볼 수 있다. 다른 프로젝트에는 가지 않는다.
+`telegram.env`는 `idle-watch.sh` 전용이라 어떤 세션에도 올라가지 않는다.
 
 ## 4. 프로젝트 비밀 파일
 

@@ -128,9 +128,10 @@ fi
 logger -t idle-watch "idle ${IDLE} min; stopping instance"
 
 # Notify through the boot-manager bot token kept in telegram.env, so the
-# watcher needs no credentials of its own. That file is deliberately not
-# secrets.env: claude-rc@.service loads secrets.env into every Claude
-# session's environment, and this token has no business being there.
+# watcher needs no credentials of its own. That file is deliberately not a
+# project env file: claude-rc@<project>.service loads projects/<project>.env
+# into that Claude session's environment, and this token has no business
+# being there.
 if [ -f "$SECRETS_FILE" ]; then
   TELEGRAM_TOKEN=''; TELEGRAM_CHAT_ID=''
   . "$SECRETS_FILE"

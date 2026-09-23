@@ -2,8 +2,8 @@
 ## Remote Control 운영 규칙 (EC2)
 
 이 세션은 EC2 위 `claude remote-control` 서버 세션이며 사용자는 Claude 모바일 앱에서
-대화한다. 트랜스크립트는 Anthropic 서버에 저장되므로 **`.env`·`secrets.env`·
-`.credentials.json`의 값을 출력하지 않는다.** 환경변수 값(`env`, `printenv`,
+대화한다. 트랜스크립트는 Anthropic 서버에 저장되므로 **`.env`·`~/.config/pocket-claude/`
+아래 파일·`.credentials.json`의 값을 출력하지 않는다.** 환경변수 값(`env`, `printenv`,
 `echo $VAR`)도 출력하지 않는다.
 
 ### 세션을 닫기 전에

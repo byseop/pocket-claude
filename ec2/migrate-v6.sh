@@ -107,3 +107,12 @@ fi
 
 echo "== 7. pocket list =="
 sudo -u ubuntu -H "$POCKET" list
+
+# v6 dropped the shared secret file: the unit only reads projects/%i.env.
+# A session that relied on GH_TOKEN/VERCEL_TOKEN would otherwise lose them
+# silently, so say so on every run - the file is moved, never deleted.
+echo
+echo "note: secrets.env is no longer injected into any session."
+echo "      claude-rc@<name>.service reads only $CONFIG_NEW/projects/<name>.env."
+echo "      Move the values a project still needs into that file (chmod 600),"
+echo "      or drop them: gh and vercel use their own CLI logins."

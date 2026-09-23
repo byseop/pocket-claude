@@ -42,7 +42,7 @@
       "Bash(aws ec2 terminate-instances:*)",
       "Read(./.env)",
       "Read(./**/.env)",
-      "Read(~/.config/pocket-claude/secrets.env)",
+      "Read(~/.config/pocket-claude/**)",
       "Read(~/.claude/.credentials.json)"
     ]
   },

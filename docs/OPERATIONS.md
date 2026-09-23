@@ -227,7 +227,7 @@ ubuntu 사용자(각 프로젝트 세션 포함)는 sudoers(`/etc/sudoers.d/clau
 
 `ec2/` 아래 파일(`pocket`, `claude-rc@.service`, `claude-rc.slice`, `claude-rc-wrap.sh`,
 `claude-rc.sudoers`, `worktree-env-hook.sh`, `idle-watch.sh`, `install.sh`,
-`claude-settings.json`, `secrets.env.example`, `telegram.env.example`)과 리포 루트의
+`claude-settings.json`, `project.env.example`, `telegram.env.example`)과 리포 루트의
 `ec2-claude-md-patch.md`를 `/tmp`로 보내고 `sudo bash /tmp/install.sh`를 실행한다.
 멱등하므로 여러 번 돌려도 된다. 박스를 v5에서 올리는 경우 설치 뒤
 `sudo bash /tmp/migrate-v6.sh <이름>=<경로> …`를 한 번 더 돌린다(이행, 멱등,
