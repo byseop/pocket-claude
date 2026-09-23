@@ -1647,9 +1647,13 @@ def tg_api(method, payload):
 
 
 def tg_send(chat_id, text, keyboard=None):
-    for i in range(0, max(len(text), 1), TG_MAX):
-        payload = {'chat_id': chat_id, 'text': text[i:i + TG_MAX] or ' '}
-        if keyboard and i == 0:
+    # Buttons ride on the LAST chunk: a multi-chunk reply arrives as stacked
+    # messages and the phone scrolls to the newest one, so buttons attached to
+    # the first chunk end up above the fold.
+    chunks = [text[i:i + TG_MAX] for i in range(0, max(len(text), 1), TG_MAX)] or [' ']
+    for n, chunk in enumerate(chunks):
+        payload = {'chat_id': chat_id, 'text': chunk or ' '}
+        if keyboard and n == len(chunks) - 1:
             payload['reply_markup'] = keyboard
         tg_api('sendMessage', payload)
 
@@ -1690,7 +1694,11 @@ def keyboard_for(rows):
 CALLBACK_VERBS = {'up': cmd_up, 'down': cmd_down, 'trees': cmd_trees}
 
 
+CALLBACK_BUDGET = 25          # seconds of the API Gateway window we allow ourselves
+
+
 def handle_callback(cb):
+    started = time.monotonic()
     tg_answer_callback(cb.get('id'))
     chat_id = str(((cb.get('message') or {}).get('chat') or {}).get('id', ''))
     from_id = str((cb.get('from') or {}).get('id', ''))
@@ -1704,9 +1712,14 @@ def handle_callback(cb):
     handler(chat_id, name)
     message_id = (cb.get('message') or {}).get('message_id')
     if message_id and verb in ('up', 'down'):
-        env = parse_pocket(ssm_run(pocket_script('list'), timeout=20))
-        if env.get('ok'):
-            tg_edit_markup(chat_id, message_id, keyboard_for(env['data']['projects']))
+        # Refresh the list markup only if the command left us time. A second SSM
+        # round trip can otherwise push the invocation past the gateway's 30s
+        # limit, and Telegram then redelivers the press.
+        left = CALLBACK_BUDGET - (time.monotonic() - started)
+        if left >= 5:
+            env = parse_pocket(ssm_run(pocket_script('list'), timeout=int(min(left, 8))))
+            if env.get('ok'):
+                tg_edit_markup(chat_id, message_id, keyboard_for(env['data']['projects']))
 ```
 
 `lambda_handler`는 본문을 파싱한 뒤 `callback_query`가 있으면 `handle_callback`으로 보내고 바로 200을 돌려준다. 예외 처리는 기존 메시지 경로와 같게 감싼다.
