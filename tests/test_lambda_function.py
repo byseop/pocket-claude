@@ -226,6 +226,19 @@ class TestPocketBridge(unittest.TestCase):
         self.assertIn('미커밋', out)
         self.assertIn('정리 가능', out)
 
+    def test_format_trees_marks_locked(self):
+        # Every worktree the phone app makes is locked, so dropping the mark
+        # showed each of them as "정리 가능" while prune in fact keeps them.
+        # Mark order follows pocket's own keep-reason order.
+        data = {'name': 'a', 'trees': [
+            {'branch': 't1', 'dirty': False, 'unpushed': False, 'locked': True, 'in_use': False, 'path': '/x'},
+            {'branch': 't2', 'dirty': True, 'unpushed': True, 'locked': True, 'in_use': True, 'path': '/y'},
+        ]}
+        out = lf.format_trees(data)
+        self.assertIn('· t1  잠김', out)
+        self.assertIn('· t2  미커밋 미푸시 잠김 사용 중', out)
+        self.assertNotIn('정리 가능', out)
+
     def test_format_trees_empty(self):
         out = lf.format_trees({'name': 'a', 'trees': []})
         self.assertIn('a', out)

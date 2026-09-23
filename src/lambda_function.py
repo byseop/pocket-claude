@@ -172,6 +172,10 @@ def format_trees(data):
             marks.append('미커밋')
         if t['unpushed']:
             marks.append('미푸시')
+        # Same order as pocket's keep reasons, so a tree the phone shows
+        # marked is a tree prune will refuse for the first reason listed.
+        if t.get('locked'):
+            marks.append('잠김')
         if t['in_use']:
             marks.append('사용 중')
         lines.append(f"· {t['branch']}  {' '.join(marks) or '정리 가능'}")
