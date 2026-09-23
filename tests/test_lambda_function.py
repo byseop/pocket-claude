@@ -17,6 +17,24 @@ def envelope_text(ok, data=None, error=None):
     return f'{lf.BEGIN}\n{body}\n{lf.END}\n'
 
 
+# A ready-made "everything worked" envelope for callback tests: it has to
+# satisfy both cmd_up/cmd_down's success formatter (name, unit) and the
+# post-command list refresh (projects) with a single stubbed ssm_run.
+ENVELOPE_OK = envelope_text(True, {'name': 'app', 'unit': 'active', 'projects': []})
+
+
+def callback_event(data, from_id=111, chat_id=111, message_id=1, callback_id='cb1'):
+    """A Telegram update body carrying a callback_query (inline button press)."""
+    return {'body': _j.dumps({
+        'callback_query': {
+            'id': callback_id,
+            'from': {'id': from_id},
+            'message': {'chat': {'id': chat_id}, 'message_id': message_id},
+            'data': data,
+        }
+    })}
+
+
 class TestFormatUptime(unittest.TestCase):
     def setUp(self):
         self.now = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
@@ -373,6 +391,43 @@ class TestHandlerRouting(unittest.TestCase):
         self.assertTrue(started)
         self.assertIn('/status', self.sent[0][1])
         self.assertNotIn('gamer4', self.sent[0][1])
+
+
+class TestButtons(TestHandlerRouting):
+    """Inline-button keyboard building and the callback_query handler.
+
+    Reuses TestHandlerRouting's setUp/tearDown so describe/ssm_ready/
+    INSTANCE_ID/ALLOWED_CHAT_ID are stubbed the same way as the message path.
+    """
+
+    def test_callback_data_within_limit(self):
+        rows = [{'name': 'a' * 24, 'unit': 'active', 'branch': 'main', 'last_activity': 0,
+                 'worktrees': 0, 'trusted': True, 'enabled': True, 'dirty': False}]
+        for row in lf.keyboard_for(rows)['inline_keyboard']:
+            for btn in row:
+                self.assertLessEqual(len(btn['callback_data'].encode()), 64)
+
+    def test_running_project_gets_stop_button(self):
+        rows = [{'name': 'a', 'unit': 'active', 'branch': 'main', 'last_activity': 0,
+                 'worktrees': 0, 'trusted': True, 'enabled': True, 'dirty': False}]
+        data = [b['callback_data'] for r in lf.keyboard_for(rows)['inline_keyboard'] for b in r]
+        self.assertIn('down:a', data)
+        self.assertNotIn('up:a', data)
+
+    def test_callback_answers_before_running_ssm(self):
+        order = []
+        lf.tg_answer_callback = lambda cb: order.append('answer')
+        lf.ssm_run = lambda script, timeout=25: order.append('ssm') or ENVELOPE_OK
+        lf.lambda_handler(callback_event('up:app'), None)
+        self.assertEqual(order[0], 'answer')
+
+    def test_callback_from_other_user_is_ignored(self):
+        lf.lambda_handler(callback_event('up:app', from_id=999), None)
+        self.assertEqual(self.sent, [])
+
+    def test_callback_with_bad_payload_is_ignored(self):
+        lf.lambda_handler(callback_event('up:Bad Name'), None)
+        self.assertEqual(self.ran, [])
 
 
 if __name__ == '__main__':

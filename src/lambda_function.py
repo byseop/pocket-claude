@@ -179,25 +179,56 @@ def format_trees(data):
 
 
 def keyboard_for(rows):
-    """Inline keyboard for /projects rows. Left to Task 8 — no buttons yet."""
-    return None
+    """One row of buttons per project. callback_data stays well under the
+    64-byte limit because names are at most 24 characters."""
+    keys = []
+    for p in rows:
+        if p['unit'] == 'active':
+            first = {'text': f"⏹ {p['name']}", 'callback_data': f"down:{p['name']}"}
+        else:
+            first = {'text': f"▶ {p['name']}", 'callback_data': f"up:{p['name']}"}
+        row = [first]
+        if p['worktrees']:
+            row.append({'text': '🌳', 'callback_data': f"trees:{p['name']}"})
+        keys.append(row)
+    return {'inline_keyboard': keys}
 
 
 # --- telegram ------------------------------------------------------------
 
-def tg_send(chat_id, text, keyboard=None):
+def tg_api(method, payload):
     token = os.environ['TELEGRAM_TOKEN']
-    url = f'https://api.telegram.org/bot{token}/sendMessage'
-    chunks = [text[i:i + TG_MAX] or ' ' for i in range(0, max(len(text), 1), TG_MAX)]
-    for i, chunk in enumerate(chunks):
-        payload = {'chat_id': chat_id, 'text': chunk}
-        if keyboard is not None and i == len(chunks) - 1:
+    req = urllib.request.Request(
+        f'https://api.telegram.org/bot{token}/{method}',
+        data=json.dumps(payload).encode(),
+        headers={'Content-Type': 'application/json'},
+    )
+    urllib.request.urlopen(req, timeout=10)
+
+
+def tg_send(chat_id, text, keyboard=None):
+    for i in range(0, max(len(text), 1), TG_MAX):
+        payload = {'chat_id': chat_id, 'text': text[i:i + TG_MAX] or ' '}
+        if keyboard and i == 0:
             payload['reply_markup'] = keyboard
-        data = json.dumps(payload).encode()
-        req = urllib.request.Request(
-            url, data=data, headers={'Content-Type': 'application/json'}
-        )
-        urllib.request.urlopen(req, timeout=10)
+        tg_api('sendMessage', payload)
+
+
+def tg_answer_callback(callback_id):
+    """Telegram shows a spinner on the button until this is called, so it runs
+    before the SSM round trip, not after."""
+    try:
+        tg_api('answerCallbackQuery', {'callback_query_id': callback_id})
+    except Exception:  # noqa: BLE001 - a missing ack must not fail the command
+        pass
+
+
+def tg_edit_markup(chat_id, message_id, keyboard):
+    try:
+        tg_api('editMessageReplyMarkup', {'chat_id': chat_id, 'message_id': message_id,
+                                          'reply_markup': keyboard})
+    except Exception:  # noqa: BLE001 - the list message may be gone
+        pass
 
 
 # --- aws -----------------------------------------------------------------
@@ -352,6 +383,35 @@ def cmd_trees(chat_id, arg):
     reply_envelope(chat_id, env, format_trees)
 
 
+CALLBACK_VERBS = {'up': cmd_up, 'down': cmd_down, 'trees': cmd_trees}
+
+
+def handle_callback(cb):
+    """Handle an inline-button press.
+
+    Answers the callback first so Telegram clears the button spinner before
+    the SSM round trip runs, then re-checks chat/from ID the same way the
+    message path checks ALLOWED_CHAT_ID. Any unknown verb, malformed
+    payload, or name that fails validate_name is ignored silently.
+    """
+    tg_answer_callback(cb.get('id'))
+    chat_id = str(((cb.get('message') or {}).get('chat') or {}).get('id', ''))
+    from_id = str((cb.get('from') or {}).get('id', ''))
+    allowed = os.environ['ALLOWED_CHAT_ID']
+    if chat_id != allowed or from_id != allowed:
+        return
+    verb, _, name = (cb.get('data') or '').partition(':')
+    handler = CALLBACK_VERBS.get(verb)
+    if handler is None or validate_name(name):
+        return
+    handler(chat_id, name)
+    message_id = (cb.get('message') or {}).get('message_id')
+    if message_id and verb in ('up', 'down'):
+        env = parse_pocket(ssm_run(pocket_script('list'), timeout=20))
+        if env.get('ok'):
+            tg_edit_markup(chat_id, message_id, keyboard_for(env['data']['projects']))
+
+
 HELP = (
     'pocket-claude v6\n\n'
     '/start          EC2 켜기\n'
@@ -382,6 +442,16 @@ def lambda_handler(event, context):
     # the same update forever against a handler that will never accept it.
     try:
         body = json.loads(event.get('body') or '{}')
+        callback = body.get('callback_query')
+        if callback:
+            # Never let a button press raise: the callback was already
+            # answered inside handle_callback, so swallow anything else
+            # here and still return 200.
+            try:
+                handle_callback(callback)
+            except Exception:  # noqa: BLE001 - deliberate catch-all
+                pass
+            return {'statusCode': 200, 'body': 'ok'}
         message = body.get('message') or body.get('edited_message') or {}
         chat_id = str((message.get('chat') or {}).get('id', ''))
         text = message.get('text') or ''
