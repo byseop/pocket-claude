@@ -1223,7 +1223,7 @@ setup() {
 # 1. main checkout: does nothing
 setup
 (cd "$MAIN" && bash "$HOOK")
-assert_eq "$(ls "$MAIN" | grep -c '^\.env$' || true)" "1" "main checkout is untouched"
+assert_eq "$(ls -a "$MAIN" | grep -c '^\.env$' || true)" "1" "main checkout is untouched"
 
 # 2. worktree: ignored files are copied
 setup
@@ -1273,17 +1273,22 @@ Expected: 훅 파일이 없어 실패.
 # nothing: hook stdout becomes session context.
 set -u
 
-CWD=$(pwd -P)
-GIT_COMMON=$(git rev-parse --git-common-dir 2>/dev/null) || exit 0
-GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+# git prints --git-common-dir relative and --git-dir absolute when the session
+# starts in a subdirectory, so compare normalized absolute paths instead
+# (--path-format needs git 2.31+; the box runs 2.43).
+GIT_COMMON=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+GIT_DIR=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || exit 0
 [ "$GIT_COMMON" = "$GIT_DIR" ] && exit 0          # main checkout: nothing to do
 
+# Copy into the worktree root, not the current directory: a session may start
+# in a subdirectory, and the app expects .env beside the project root.
+WT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 MAIN=$(cd "$(dirname "$GIT_COMMON")" && pwd -P)
 [ -d "$MAIN" ] || exit 0
 
 for rel in .env .env.local .env.development.local .vercel/project.json; do
   src="$MAIN/$rel"
-  dst="$CWD/$rel"
+  dst="$WT_ROOT/$rel"
   [ -f "$src" ] || continue
   [ -e "$dst" ] && continue
   git -C "$MAIN" check-ignore -q "$rel" || continue   # only ignored files
