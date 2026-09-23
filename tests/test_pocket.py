@@ -108,7 +108,7 @@ class PocketCase(unittest.TestCase):
 
 class TestPureHelpers(PocketCase):
     def test_valid_names(self):
-        res = self.run_pocket('check-name', 'guam-go', '--json')
+        res = self.run_pocket('check-name', 'my-app', '--json')
         self.assertTrue(self.json_of(res)['ok'])
 
     def test_invalid_names(self):
@@ -386,6 +386,38 @@ class TestTrees(PocketCase):
         self.assertEqual(data['removed'], [])
         self.assertIn('사용 중', data['kept'][0]['reason'])
 
+    def test_prune_keeps_tree_when_session_cwd_is_a_subdirectory(self):
+        # A session that cd'd into src/ still has the worktree open. Comparing
+        # only the exact path calls it free and prune deletes it underneath.
+        d = self.setup_trees(['clean'])
+        sub = d / '.claude' / 'worktrees' / 'clean' / 'src'
+        sub.mkdir(parents=True)
+        data = self.json_of(self.run_pocket(
+            'prune', 'app', '--json', POCKET_CWDS=str(sub)))['data']
+        self.assertEqual(data['removed'], [])
+        self.assertIn('사용 중', data['kept'][0]['reason'])
+
+    def test_trees_rejects_sibling_prefix_and_parent_paths(self):
+        # ".claude/worktrees-evil/x" shares the scratch root's string prefix,
+        # and a ".." path resolves back out of it. Neither is session scratch,
+        # so neither may become a trees or prune candidate.
+        d = self.setup_trees(['clean'])
+        evil = d / '.claude' / 'worktrees-evil' / 'x'
+        evil.mkdir(parents=True)
+        (d / '.claude' / 'not-scratch').mkdir(parents=True)
+        dotdot = d / '.claude' / 'worktrees' / '..' / 'not-scratch'
+        lines = (self.state / 'worktrees.txt').read_text().splitlines()
+        lines += [f'worktree {evil}', 'branch refs/heads/evil', '',
+                  f'worktree {dotdot}', 'branch refs/heads/dotdot', '']
+        (self.state / 'worktrees.txt').write_text('\n'.join(lines))
+        trees = self.json_of(self.run_pocket('trees', 'app', '--json'))['data']['trees']
+        self.assertEqual([t['branch'] for t in trees], ['worktree-clean'])
+        data = self.json_of(self.run_pocket('prune', 'app', '--json'))['data']
+        touched = data['removed'] + data['would_remove'] + [k['path'] for k in data['kept']]
+        for path in (evil, dotdot):
+            self.assertNotIn(os.path.realpath(str(path)),
+                             [os.path.realpath(t) for t in touched])
+
     def test_trees_marks_unpushed_when_git_cannot_tell(self):
         # Both log forms fail for a "noremote" worktree; a failed check must
         # never look identical to "nothing unpushed".
@@ -415,7 +447,7 @@ class TestTrees(PocketCase):
         outside = self.root / 'elsewhere' / 'hand-made'
         outside.mkdir(parents=True)
         lines = (self.state / 'worktrees.txt').read_text().splitlines()
-        lines += [f'worktree {outside}', 'branch refs/heads/feat/korean-titles-1000', '']
+        lines += [f'worktree {outside}', 'branch refs/heads/feat/hand-made', '']
         (self.state / 'worktrees.txt').write_text('\n'.join(lines))
         trees = self.json_of(self.run_pocket('trees', 'app', '--json'))['data']['trees']
         self.assertEqual(len(trees), 1)
@@ -426,7 +458,7 @@ class TestTrees(PocketCase):
         outside = self.root / 'elsewhere' / 'hand-made'
         outside.mkdir(parents=True)
         lines = (self.state / 'worktrees.txt').read_text().splitlines()
-        lines += [f'worktree {outside}', 'branch refs/heads/feat/korean-titles-1000', '']
+        lines += [f'worktree {outside}', 'branch refs/heads/feat/hand-made', '']
         (self.state / 'worktrees.txt').write_text('\n'.join(lines))
         data = self.json_of(self.run_pocket('prune', 'app', '--json'))['data']
         touched = data['removed'] + data['would_remove'] + [k['path'] for k in data['kept']]

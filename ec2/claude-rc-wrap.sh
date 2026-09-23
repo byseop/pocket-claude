@@ -33,7 +33,7 @@ rc_workdir() {
 # The name becomes a tmux session ID and is interpolated into shell commands,
 # so this guard is the injection boundary that the sudoers rule creates.
 rc_valid_name() {
-  [[ "$1" =~ ^[a-z0-9-]{1,24}$ ]] && return 0; return 1
+  [[ "$1" =~ ^[a-z0-9][a-z0-9-]{0,23}$ ]] && return 0; return 1
 }
 
 # A server refuses to start in an untrusted directory and systemd would then

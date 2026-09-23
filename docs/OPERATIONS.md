@@ -181,8 +181,8 @@ systemctl show claude-rc.slice -p MemoryCurrent,MemoryHigh,MemoryMax
 바뀐다(스티키). 각 인스턴스는 `claude-rc-wrap.sh <p>`가 프로젝트 실제 경로를
 `realpath`로 풀어 tmux 세션 `rc-<p>`를 만들고 블록한다. 세션이 죽으면 래퍼가 1로
 종료하고 `Restart=on-failure`가 10초 뒤 되살린다. `ExecStop`은 tmux 세션을 죽인다.
-래퍼는 Lambda·`pocket`의 검증과 별개로 세션 이름을 `^[a-z0-9-]{1,24}$`로 직접
-검증해 형식이 어긋나면 1로 종료한다.
+래퍼는 Lambda·`pocket`의 검증과 별개로 세션 이름을 `^[a-z0-9][a-z0-9-]{0,23}$`로
+직접 검증해 형식이 어긋나면 1로 종료한다 — Lambda·`pocket`·sudoers와 같은 규칙이다.
 
 `ExecStart`에서 `tmux new-session -d`를 직접 부르면 안 된다. tmux 서버가 스스로
 데몬화해 systemd가 PID를 놓치고 재시작 루프가 돈다. 래퍼는 이걸 피하려고 있다.

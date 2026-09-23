@@ -396,13 +396,17 @@ def unpushed_commits(wt):
 def tree_state(entry, cwds):
     wt = entry['path']
     _rc, dirty = run(['git', '-C', wt, 'status', '--porcelain'])
+    # A session that cd'd into a subdirectory still has the worktree open, so
+    # an exact match alone would call it free and prune would delete it.
+    real = os.path.realpath(wt)
+    in_use = any(cwd == real or cwd.startswith(real + os.sep) for cwd in cwds)
     return {
         'path': wt,
         'branch': entry.get('branch', '?'),
         'dirty': bool(dirty.strip()),
         'unpushed': unpushed_commits(wt),
         'locked': bool(entry.get('locked')),
-        'in_use': os.path.realpath(wt) in cwds,
+        'in_use': in_use,
     }
 
 

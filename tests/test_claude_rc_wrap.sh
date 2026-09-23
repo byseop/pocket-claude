@@ -71,6 +71,9 @@ rc_valid_name '../x'; assert_eq "$?" 1 "rejects path traversal"
 rc_valid_name '$(x)'; assert_eq "$?" 1 "rejects command substitution"
 rc_valid_name 'Feat'; assert_eq "$?" 1 "rejects uppercase"
 rc_valid_name ''; assert_eq "$?" 1 "rejects empty"
+# Same rule as pocket, the Lambda and sudoers: a name starts alphanumeric.
+rc_valid_name '-x'; assert_eq "$?" 1 "rejects leading hyphen"
+rc_valid_name '-'; assert_eq "$?" 1 "rejects a bare hyphen"
 rc_valid_name "$(printf 'a%.0s' {1..25})"; assert_eq "$?" 1 "rejects name longer than 24 chars"
 
 # Every tmux call in main must name the per-unit socket rc-<name>, so each

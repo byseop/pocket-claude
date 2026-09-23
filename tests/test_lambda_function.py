@@ -122,8 +122,8 @@ class TestValidateName(unittest.TestCase):
 
 class TestPocketBridge(unittest.TestCase):
     def test_script_is_posix_and_quotes_nothing_dangerous(self):
-        s = lf.pocket_script('up', 'guam-go')
-        self.assertIn('/home/ubuntu/bin/pocket up guam-go --json', s)
+        s = lf.pocket_script('up', 'my-app')
+        self.assertIn('/home/ubuntu/bin/pocket up my-app --json', s)
         self.assertIn('sudo -u ubuntu', s)
         self.assertNotIn('[[', s)
 
@@ -415,7 +415,10 @@ class TestHandlerRouting(unittest.TestCase):
         lf.lambda_handler(self._event('/start'), None)
         self.assertTrue(started)
         self.assertIn('/status', self.sent[0][1])
-        self.assertNotIn('gamer4', self.sent[0][1])
+        # v6 has no hard-wired session: /start must point at /status, never
+        # promise one named session or unit is coming up.
+        self.assertNotIn('claude-rc@', self.sent[0][1])
+        self.assertNotIn('ops', self.sent[0][1])
 
 
 class TestTgSend(unittest.TestCase):

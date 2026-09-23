@@ -9,7 +9,7 @@ FAILS=0
 
 setup() {
   TMP=$(mktemp -d)
-  mkdir -p "$TMP/projects/-home-ubuntu-gamer4info" "$TMP/jobs" "$TMP/bin"
+  mkdir -p "$TMP/projects/-home-ubuntu-work-myapp" "$TMP/jobs" "$TMP/bin"
   # Fake ps: one claude process whose cumulative CPU is $FAKE_CPU seconds.
   printf '#!/bin/sh\necho "${FAKE_CPU:-0} claude"\n' > "$TMP/bin/ps"
   chmod +x "$TMP/bin/ps"
@@ -63,8 +63,8 @@ assert_eq "$(stopped "$OUT")" yes "two idle hours stop the instance"
 # 3. A transcript written 10 minutes ago resets the clock.
 setup
 echo "0 $(ago 7200)" > "$TMP/state"
-touch "$TMP/projects/-home-ubuntu-gamer4info/abc.jsonl"
-touch_ago "$TMP/projects/-home-ubuntu-gamer4info/abc.jsonl" 600
+touch "$TMP/projects/-home-ubuntu-work-myapp/abc.jsonl"
+touch_ago "$TMP/projects/-home-ubuntu-work-myapp/abc.jsonl" 600
 OUT=$(run)
 assert_eq "$(stopped "$OUT")" no "recent transcript keeps the instance up"
 LAST=$(cut -d' ' -f2 "$TMP/state")
@@ -75,8 +75,8 @@ LAST=$(cut -d' ' -f2 "$TMP/state")
 # 4. A transcript older than the window does not help.
 setup
 echo "0 $(ago 7200)" > "$TMP/state"
-touch "$TMP/projects/-home-ubuntu-gamer4info/old.jsonl"
-touch_ago "$TMP/projects/-home-ubuntu-gamer4info/old.jsonl" 7000
+touch "$TMP/projects/-home-ubuntu-work-myapp/old.jsonl"
+touch_ago "$TMP/projects/-home-ubuntu-work-myapp/old.jsonl" 7000
 OUT=$(run)
 assert_eq "$(stopped "$OUT")" yes "old transcript does not count"
 
