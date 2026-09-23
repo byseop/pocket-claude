@@ -166,7 +166,8 @@ def emit(obj, as_json):
     if verb == 'trees':
         for t in data.get('trees', []):
             flags = ' '.join(f for f, on in (
-                ('dirty', t['dirty']), ('unpushed', t['unpushed']), ('in_use', t['in_use'])
+                ('dirty', t['dirty']), ('unpushed', t['unpushed']),
+                ('locked', t['locked']), ('in_use', t['in_use'])
             ) if on)
             print(f"{t['branch']:<24} {t['path']}" + (f"  [{flags}]" if flags else ''))
         return
@@ -312,7 +313,10 @@ def cmd_trust(args):
 def claude_cwds():
     """Working directories of live claude processes.
 
-    POCKET_CWDS (colon-separated) overrides the scan in tests.
+    POCKET_CWDS (colon-separated) overrides the scan in tests. On the box, a
+    session process's comm is the running version string (e.g. "2.1.278"),
+    not "claude" - only the long-lived server process is named "claude" - so
+    the exe symlink is what actually identifies a session process.
     """
     override = os.environ.get('POCKET_CWDS')
     if override is not None:
@@ -324,9 +328,20 @@ def claude_cwds():
         if not pid.isdigit():
             continue
         try:
-            with open(f'/proc/{pid}/comm') as fh:
-                if fh.read().strip() != 'claude':
-                    continue
+            is_claude = False
+            try:
+                exe = os.path.realpath(f'/proc/{pid}/exe')
+                is_claude = '/claude/' in exe or os.path.basename(exe) == 'claude'
+            except OSError:
+                pass
+            if not is_claude:
+                # exe is unreadable for another user's process; fall back to
+                # the first cmdline word.
+                with open(f'/proc/{pid}/cmdline', 'rb') as fh:
+                    argv0 = fh.read().split(b'\0', 1)[0].decode(errors='replace')
+                is_claude = os.path.basename(argv0) == 'claude'
+            if not is_claude:
+                continue
             out.append(os.path.realpath(f'/proc/{pid}/cwd'))
         except OSError:
             continue
@@ -334,19 +349,31 @@ def claude_cwds():
 
 
 def worktrees_of(path):
-    """Extra worktrees of a repo (the main checkout is excluded)."""
+    """Worktrees pocket manages for a repo: session scratch only.
+
+    A worktree living outside <repo>/.claude/worktrees/ was made by hand -
+    it is the user's own working directory, not session scratch - and must
+    never be a trees/prune candidate, however clean or old it looks.
+    """
     _rc, out = run(['git', '-C', path, 'worktree', 'list', '--porcelain'])
     entries, cur = [], {}
     for line in out.splitlines():
         if line.startswith('worktree '):
             if cur:
                 entries.append(cur)
-            cur = {'path': line.split(' ', 1)[1].strip()}
+            cur = {'path': line.split(' ', 1)[1].strip(), 'locked': False}
         elif line.startswith('branch '):
-            cur['branch'] = line.split('/')[-1].strip()
+            branch = line.split(' ', 1)[1].strip()
+            prefix = 'refs/heads/'
+            cur['branch'] = branch[len(prefix):] if branch.startswith(prefix) else branch
+        elif line.startswith('locked'):
+            cur['locked'] = True
     if cur:
         entries.append(cur)
-    return [e for e in entries if os.path.realpath(e.get('path', '')) != os.path.realpath(path)]
+    scratch_root = os.path.realpath(os.path.join(path, '.claude', 'worktrees')) + os.sep
+    return [e for e in entries
+            if os.path.realpath(e.get('path', '')) != os.path.realpath(path)
+            and os.path.realpath(e.get('path', '')).startswith(scratch_root)]
 
 
 def unpushed_commits(wt):
@@ -374,6 +401,7 @@ def tree_state(entry, cwds):
         'branch': entry.get('branch', '?'),
         'dirty': bool(dirty.strip()),
         'unpushed': unpushed_commits(wt),
+        'locked': bool(entry.get('locked')),
         'in_use': os.path.realpath(wt) in cwds,
     }
 
@@ -405,6 +433,7 @@ def cmd_prune(args):
         st = tree_state(entry, cwds)
         reason = ('미커밋 변경이 있어요' if st['dirty'] else
                   '미푸시 커밋이 있어요' if st['unpushed'] else
+                  '세션이 잠갔어요' if st['locked'] else
                   '세션이 사용 중이에요' if st['in_use'] else None)
         if reason:
             kept.append({'path': st['path'], 'branch': st['branch'], 'reason': reason})

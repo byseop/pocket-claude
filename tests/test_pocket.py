@@ -408,6 +408,54 @@ class TestTrees(PocketCase):
         log = (self.state / 'git.log').read_text()
         self.assertIn('branch -d worktree-clean', log)
 
+    def test_trees_ignores_worktrees_outside_claude_dir(self):
+        # A worktree the user created by hand elsewhere is their own working
+        # directory, not session scratch, and must never be listed.
+        d = self.setup_trees(['clean'])
+        outside = self.root / 'elsewhere' / 'hand-made'
+        outside.mkdir(parents=True)
+        lines = (self.state / 'worktrees.txt').read_text().splitlines()
+        lines += [f'worktree {outside}', 'branch refs/heads/feat/korean-titles-1000', '']
+        (self.state / 'worktrees.txt').write_text('\n'.join(lines))
+        trees = self.json_of(self.run_pocket('trees', 'app', '--json'))['data']['trees']
+        self.assertEqual(len(trees), 1)
+        self.assertNotIn(str(outside), [t['path'] for t in trees])
+
+    def test_prune_never_touches_outside_worktrees(self):
+        d = self.setup_trees(['clean'])
+        outside = self.root / 'elsewhere' / 'hand-made'
+        outside.mkdir(parents=True)
+        lines = (self.state / 'worktrees.txt').read_text().splitlines()
+        lines += [f'worktree {outside}', 'branch refs/heads/feat/korean-titles-1000', '']
+        (self.state / 'worktrees.txt').write_text('\n'.join(lines))
+        data = self.json_of(self.run_pocket('prune', 'app', '--json'))['data']
+        touched = data['removed'] + data['would_remove'] + [k['path'] for k in data['kept']]
+        self.assertNotIn(str(outside), touched)
+
+    def test_branch_name_keeps_slashes(self):
+        d = self.make_project('app', trusted=True)
+        write_exec(self.bin / 'git', FAKE_GIT_TREES)
+        wt = d / '.claude' / 'worktrees' / 'x'
+        wt.mkdir(parents=True)
+        lines = [f'worktree {d}', 'branch refs/heads/main', '',
+                 f'worktree {wt}', 'branch refs/heads/feat/x', '']
+        (self.state / 'worktrees.txt').write_text('\n'.join(lines))
+        trees = self.json_of(self.run_pocket('trees', 'app', '--json'))['data']['trees']
+        self.assertEqual(trees[0]['branch'], 'feat/x')
+
+    def test_prune_keeps_locked_worktree(self):
+        d = self.make_project('app', trusted=True)
+        write_exec(self.bin / 'git', FAKE_GIT_TREES)
+        wt = d / '.claude' / 'worktrees' / 'locked-one'
+        wt.mkdir(parents=True)
+        lines = [f'worktree {d}', 'branch refs/heads/main', '',
+                 f'worktree {wt}', 'branch refs/heads/worktree-locked-one',
+                 'locked claude agent locked-one (pid 1 start 1)', '']
+        (self.state / 'worktrees.txt').write_text('\n'.join(lines))
+        data = self.json_of(self.run_pocket('prune', 'app', '--json'))['data']
+        self.assertEqual(data['removed'], [])
+        self.assertIn('잠갔', data['kept'][0]['reason'])
+
 
 if __name__ == '__main__':
     unittest.main()
