@@ -1,15 +1,17 @@
 """
-ec2-boot-manager Lambda - v5.
+ec2-boot-manager Lambda - v6.
 
-Power switch plus session-unit manager. The instance runs Claude Code
-Remote Control server sessions under systemd (claude-rc@<name>); the phone
-talks to those sessions through the Claude app, never through this bot.
-SSM is used only to flip units on and off and to read state, never to
-launch Claude directly: process lifetime belongs to systemd (see the v3
-post-mortem in docs/OPERATIONS.md). Nothing here blocks for long, because
-API Gateway's integration timeout is 30s.
+Power switch plus a thin caller for `pocket`, the CLI on the box that owns
+the box's layout (projects under ~/work, systemd units, worktrees). This
+Lambda never builds git or systemd commands itself: it validates the
+project name, runs one `pocket` verb over SSM, parses the JSON envelope
+between the ===POCKET-BEGIN===/===POCKET-END=== sentinel lines, and turns
+it into Korean text. SSM is used only to call `pocket` and read state,
+never to launch Claude directly: process lifetime belongs to systemd (see
+the v3 post-mortem in docs/OPERATIONS.md). Nothing here blocks for long,
+because API Gateway's integration timeout is 30s.
 
-Commands: /start /stop /status /sessions /new <name> /kill <name> /rm <name>
+Commands: /start /stop /status /projects /up <name> /down <name> /trees <name>
 """
 
 import json
@@ -30,51 +32,18 @@ ssm = boto3.client('ssm', region_name=AWS_REGION)
 INSTANCE_ID = os.environ.get('INSTANCE_ID', '')
 
 TG_MAX = 3900
-# Block separator for the /status script. A plain '---' also shows up
-# inside the captured pane, which split the output in the wrong place.
-SEP = '===RC==='
-OPS = 'ops'
-UNIT_PREFIX = 'claude-rc@'
-SESSION_PREFIX = 'gamer4-'
-REPO = '/home/ubuntu/gamer4info'
-WORKTREES = '/home/ubuntu/worktrees'
-PROJECTS = '/home/ubuntu/.claude/projects'
-CLAUDE_ENV = '/home/ubuntu/.claude/.env'
-CLAUDE_CREDS = '/home/ubuntu/.claude/.credentials.json'
 
-# Session names become unit names, tmux session names, branch names and
-# shell words inside SSM scripts. The character class is the injection guard.
-NAME_RE = re.compile(r'^[a-z0-9-]{1,24}$')
+POCKET = '/home/ubuntu/bin/pocket'
+BEGIN, END = '===POCKET-BEGIN===', '===POCKET-END==='
+SSM_STDOUT_LIMIT = 24000
 
-ANSI_RE = re.compile(r'\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][A-B]')
-AUTH_RE = re.compile(r'401|OAuth|Please run /login')
-
-RECOVERY = (
-    '   복구 (SSM 셸, ubuntu 사용자):\n'
-    '   1. ~/.claude/.env 에서 CLAUDE_CODE_OAUTH_TOKEN 줄 제거\n'
-    '   2. claude auth login   (claude.ai 선택)\n'
-    '   3. sudo systemctl restart claude-rc@ops'
-)
+# A project name becomes a systemd instance name, a directory name and a
+# shell word inside SSM scripts. The character class is the injection
+# guard; `pocket` checks the same rule again once the value reaches the box.
+NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,23}$')
 
 
 # --- pure helpers (unit tested, no AWS) ----------------------------------
-
-def strip_ansi(text):
-    """Remove ANSI escape sequences so tmux output is readable on mobile."""
-    return ANSI_RE.sub('', text)
-
-
-def detect_auth_error(pane_text):
-    """Return the most recent auth-failure line, or None if auth looks fine.
-
-    The process stays alive when the OAuth token is revoked, so liveness
-    checks cannot see this failure. It only shows up on screen.
-    """
-    for line in reversed(pane_text.splitlines()):
-        if AUTH_RE.search(line):
-            return line.strip()
-    return None
-
 
 def format_uptime(launch_time, now):
     total = max(int((now - launch_time).total_seconds()), 0)
@@ -96,149 +65,18 @@ def format_error(command, exc):
 
 
 def parse_command(text):
-    """Split '/new@bot feat-x' into ('/new', 'feat-x')."""
+    """Split '/up@bot feat-x' into ('/up', 'feat-x')."""
     head, _, arg = text.strip().partition(' ')
     return head.split('@')[0], arg.strip()
 
 
 def validate_name(name):
-    """Return an error message for a bad session name, or None when fine."""
+    """Return an error message for a bad project name, or None when fine."""
     if not name:
-        return '세션 이름이 필요해요. 예: /new feat-x, /kill feat-x'
+        return '프로젝트 이름이 필요해요. 예: /up feat-x, /down feat-x'
     if not NAME_RE.fullmatch(name):
-        return '이름은 소문자·숫자·하이픈 1~24자만 돼요.'
-    if name == OPS:
-        return f'{OPS} 는 예약된 이름이에요. 부팅 시 자동으로 뜹니다.'
+        return '이름은 소문자·숫자·하이픈 1~24자, 첫 글자는 소문자나 숫자여야 해요.'
     return None
-
-
-def workdir(name):
-    return REPO if name == OPS else f'{WORKTREES}/{name}'
-
-
-def as_ubuntu(body):
-    """Wrap a POSIX-sh body so SSM (root, /bin/sh) runs it as ubuntu.
-
-    A quoted heredoc keeps the body out of the outer shell's quoting rules,
-    so the script text is exactly what the tests see.
-    """
-    return f"sudo -u ubuntu -H sh <<'EOF'\n{body}\nEOF\n"
-
-
-def new_session_script(name):
-    d = workdir(name)
-    return as_ubuntu(
-        'set -e\n'
-        f'if [ ! -d {d} ]; then\n'
-        f'  git -C {REPO} fetch -q origin main || true\n'
-        f'  if git -C {REPO} show-ref --verify --quiet refs/heads/{name}; then\n'
-        f'    git -C {REPO} worktree add {d} {name}\n'
-        '  else\n'
-        f'    git -C {REPO} worktree add {d} -b {name} origin/main\n'
-        '  fi\n'
-        'fi\n'
-        f'[ -f {d}/.env ] || cp {REPO}/.env {d}/.env\n'
-        f'sudo systemctl start {UNIT_PREFIX}{name}\n'
-        f'systemctl is-active {UNIT_PREFIX}{name} || true'
-    )
-
-
-def kill_session_script(name):
-    return as_ubuntu(
-        f'sudo systemctl stop {UNIT_PREFIX}{name}\n'
-        f'systemctl is-active {UNIT_PREFIX}{name} || true'
-    )
-
-
-def rm_session_script(name):
-    d = workdir(name)
-    return as_ubuntu(
-        f'sudo systemctl stop {UNIT_PREFIX}{name}\n'
-        f'if [ ! -d {d} ]; then echo MISSING; exit 0; fi\n'
-        f'if [ -n "$(git -C {d} status --porcelain)" ]; then echo DIRTY; exit 0; fi\n'
-        f'git -C {REPO} worktree remove {d} || {{ echo RM_FAILED; exit 0; }}\n'
-        'echo REMOVED'
-    )
-
-
-def status_script():
-    """Three SEP-separated blocks: units, ops screen, auth flags."""
-    return (
-        f"systemctl list-units '{UNIT_PREFIX}*' --all --no-legend --plain "
-        "| awk '{print $1, $3}' || true\n"
-        f'echo {SEP}\n'
-        f'sudo -u ubuntu tmux -L rc-{OPS} capture-pane -t rc-{OPS} -p -S -200 2>/dev/null || true\n'
-        f'echo {SEP}\n'
-        f'grep -q CLAUDE_CODE_OAUTH_TOKEN {CLAUDE_ENV} 2>/dev/null && echo TOKEN_IN_ENV\n'
-        f'test -f {CLAUDE_CREDS} && echo CREDS_OK || echo CREDS_MISSING\n'
-    )
-
-
-def sessions_script():
-    """One '<name> <active> <branch> <last transcript epoch>' line per session.
-
-    The transcript directory is the working directory with '/' and '.'
-    turned into '-', which is how Claude Code names ~/.claude/projects/*.
-    """
-    return as_ubuntu(
-        f'for name in {OPS} $(ls {WORKTREES} 2>/dev/null); do\n'
-        f'  if [ "$name" = {OPS} ]; then dir={REPO}; else dir={WORKTREES}/$name; fi\n'
-        f'  active=$(systemctl is-active {UNIT_PREFIX}$name 2>/dev/null || true)\n'
-        '  branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")\n'
-        "  slug=$(echo \"$dir\" | tr '/.' '--')\n"
-        f'  last=$(ls -t {PROJECTS}/$slug/*.jsonl 2>/dev/null | head -1)\n'
-        '  if [ -n "$last" ]; then mtime=$(stat -c %Y "$last"); else mtime=0; fi\n'
-        '  echo "$name ${active:-unknown} $branch $mtime"\n'
-        'done'
-    )
-
-
-def parse_units(text):
-    """'claude-rc@ops.service active' lines -> [('ops', 'active'), ...]."""
-    rows = []
-    for line in text.splitlines():
-        parts = line.split()
-        if len(parts) < 2 or not parts[0].startswith(UNIT_PREFIX):
-            continue
-        name = parts[0][len(UNIT_PREFIX):].removesuffix('.service')
-        rows.append((name, parts[1]))
-    return rows
-
-
-def auth_problem(pane, flags):
-    """Return a human-readable auth problem, or None when auth looks fine.
-
-    Remote Control only works on the claude.ai login in .credentials.json.
-    A leftover CLAUDE_CODE_OAUTH_TOKEN in ~/.claude/.env makes the CLI
-    refuse to start the server ("API-key auth takes precedence"), which is
-    the most likely misconfiguration after the v4 -> v5 migration.
-    """
-    if 'TOKEN_IN_ENV' in flags:
-        return '~/.claude/.env 에 CLAUDE_CODE_OAUTH_TOKEN 이 남아 있어요 (Remote Control 차단)'
-    if 'CREDS_MISSING' in flags:
-        return 'claude.ai 로그인이 없어요 — claude auth login 필요'
-    return detect_auth_error(pane)
-
-
-def build_status(state, uptime, units, auth_error):
-    if state != 'running':
-        return f'⚪ EC2 {state}\n   /start 로 켜세요.'
-
-    lines = [f'✅ EC2 running ({uptime})']
-    by_name = dict(units or [])
-    ops_state = by_name.pop(OPS, None)
-    if ops_state == 'active':
-        lines.append(f'🟢 {UNIT_PREFIX}{OPS} active')
-    else:
-        lines.append(f'❌ {UNIT_PREFIX}{OPS} {ops_state or "없음"} — 정지됨')
-    for name, unit_state in by_name.items():
-        dot = '🟢' if unit_state == 'active' else '⚪'
-        lines.append(f'{dot} {UNIT_PREFIX}{name} {unit_state}')
-    if auth_error:
-        lines.append(f'❌ 인증 실패\n   "{auth_error}"\n\n{RECOVERY}')
-    else:
-        lines.append('✅ 인증 OK')
-    return '\n'.join(lines)
 
 
 def format_age(epoch, now):
@@ -252,36 +90,97 @@ def format_age(epoch, now):
     return f'{secs // 86400}일 전'
 
 
-def parse_sessions(text):
-    """'<name> <active> <branch> <epoch>' lines -> tuples. Bad lines are dropped."""
-    rows = []
-    for line in text.splitlines():
-        parts = line.split()
-        if len(parts) != 4 or not parts[3].isdigit():
-            continue
-        rows.append((parts[0], parts[1], parts[2], int(parts[3])))
-    return rows
+def pocket_script(verb, *args):
+    """POSIX sh that runs one pocket verb as ubuntu and prints its envelope."""
+    words = ' '.join([verb, *args]).strip()
+    return f'sudo -u ubuntu -H {POCKET} {words} --json 2>&1 || true\n'
 
 
-def build_sessions(rows, now):
+def parse_pocket(out):
+    """Last complete envelope from a mixed stdout, or an error envelope."""
+    if len(out) >= SSM_STDOUT_LIMIT:
+        return {'ok': False, 'error': '박스 응답이 잘렸어요. 잠시 후 다시 시도하세요.'}
+    if BEGIN not in out or END not in out:
+        tail = out.strip()[-300:]
+        return {'ok': False, 'error': f'박스에서 응답을 읽지 못했어요.\n{tail}'}
+    body = out.rsplit(BEGIN, 1)[1].split(END, 1)[0]
+    try:
+        return json.loads(body)
+    except ValueError:
+        return {'ok': False, 'error': '박스 응답을 해석하지 못했어요.'}
+
+
+def format_projects(rows):
     if not rows:
-        return '세션 없음. /new <name> 으로 만드세요.'
+        return '프로젝트가 없어요. 박스의 ~/work 아래에 리포 폴더나 링크를 두세요.'
+    now = time.time()
     lines = []
-    for name, active, branch, mtime in rows:
-        dot = '🟢' if active == 'active' else '⚪'
-        last = format_age(mtime, now) if mtime else '대화 없음'
-        lines.append(f'{dot} {SESSION_PREFIX}{name}  [{branch}]  {last}')
+    for p in rows:
+        dot = '🟢' if p['unit'] == 'active' else '⚪'
+        last = format_age(p['last_activity'], now) if p['last_activity'] else '대화 없음'
+        line = f"{dot} {p['name']}  [{p['branch']}]  {last}"
+        if p['worktrees']:
+            line += f"  워크트리 {p['worktrees']}"
+        if not p['trusted']:
+            line += '\n   ⚠️ 신뢰 필요 — SSM 셸에서 pocket trust ' + p['name']
+        lines.append(line)
     return '\n'.join(lines)
+
+
+def format_status(data, uptime):
+    mem, disk, auth = data['mem'], data['disk'], data['auth']
+    lines = [f"✅ EC2 running ({uptime})"]
+    servers = data.get('servers') or []
+    if servers:
+        for s in servers:
+            dot = '🟢' if s['unit'] == 'active' else '⚪'
+            lines.append(f"{dot} {s['name']} {s['unit']}")
+    else:
+        lines.append('⚪ 켜진 서버 없음')
+    lines.append(f"프로젝트 {data['projects']}개 · 동시 한도 {data['max_servers']}")
+    lines.append(f"메모리 여유 {mem['available_mb']}MB / {mem['total_mb']}MB · 디스크 여유 {disk['free_gb']}GB")
+    if auth['token_in_env']:
+        lines.append('❌ ~/.claude/.env 에 CLAUDE_CODE_OAUTH_TOKEN 이 남아 있어요 (Remote Control 차단)')
+    elif not auth['creds']:
+        lines.append('❌ claude.ai 로그인이 없어요 — SSM 셸에서 claude auth login')
+    else:
+        lines.append('✅ 인증 OK')
+    return '\n'.join(lines)
+
+
+def format_trees(data):
+    trees = data.get('trees') or []
+    if not trees:
+        return f"{data['name']}: 세션 워크트리가 없어요."
+    lines = [f"{data['name']} 워크트리 {len(trees)}개"]
+    for t in trees:
+        marks = []
+        if t['dirty']:
+            marks.append('미커밋')
+        if t['unpushed']:
+            marks.append('미푸시')
+        if t['in_use']:
+            marks.append('사용 중')
+        lines.append(f"· {t['branch']}  {' '.join(marks) or '정리 가능'}")
+    return '\n'.join(lines)
+
+
+def keyboard_for(rows):
+    """Inline keyboard for /projects rows. Left to Task 8 — no buttons yet."""
+    return None
 
 
 # --- telegram ------------------------------------------------------------
 
-def tg_send(chat_id, text):
+def tg_send(chat_id, text, keyboard=None):
     token = os.environ['TELEGRAM_TOKEN']
     url = f'https://api.telegram.org/bot{token}/sendMessage'
-    for i in range(0, max(len(text), 1), TG_MAX):
-        chunk = text[i:i + TG_MAX] or ' '
-        data = json.dumps({'chat_id': chat_id, 'text': chunk}).encode()
+    chunks = [text[i:i + TG_MAX] or ' ' for i in range(0, max(len(text), 1), TG_MAX)]
+    for i, chunk in enumerate(chunks):
+        payload = {'chat_id': chat_id, 'text': chunk}
+        if keyboard is not None and i == len(chunks) - 1:
+            payload['reply_markup'] = keyboard
+        data = json.dumps(payload).encode()
         req = urllib.request.Request(
             url, data=data, headers={'Content-Type': 'application/json'}
         )
@@ -305,11 +204,11 @@ def ssm_ready():
 
 
 def ssm_run(script, timeout=25):
-    """Run a short read-only script and return stdout.
+    """Run a short script and return stdout.
 
-    Used by /status, /sessions, /new, /kill and /rm. Never used to launch
-    Claude itself: systemd owns startup. The timeout ceiling keeps us well
-    under API Gateway's 30s integration limit.
+    Used to call `pocket`. Never used to launch Claude itself: systemd owns
+    startup. The timeout ceiling keeps us well under API Gateway's 30s
+    integration limit.
     """
     cid = ssm.send_command(
         InstanceIds=[INSTANCE_ID],
@@ -344,11 +243,7 @@ def cmd_start(chat_id, arg):
         tg_send(chat_id, f'⚠️ 현재 상태: {state}. 잠시 후 다시 시도하세요.')
         return
     ec2.start_instances(InstanceIds=[INSTANCE_ID])
-    tg_send(
-        chat_id,
-        f'🔄 EC2를 켰습니다. 1분쯤 뒤 Claude 앱 Code 탭에 {SESSION_PREFIX}{OPS} 세션이 보여요.\n'
-        '세션은 systemd가 자동으로 띄웁니다. /status 로 확인.',
-    )
+    tg_send(chat_id, '🔄 EC2를 켰습니다. 1분쯤 뒤 /status 로 확인하세요.')
 
 
 def cmd_stop(chat_id, arg):
@@ -360,39 +255,8 @@ def cmd_stop(chat_id, arg):
     tg_send(chat_id, '🔄 EC2를 끕니다.')
 
 
-def cmd_status(chat_id, arg):
-    state, launch = describe()
-    if state != 'running':
-        tg_send(chat_id, build_status(state, None, None, None))
-        return
-    if not ssm_ready():
-        tg_send(chat_id, '🔄 부팅 중 — SSM 에이전트 대기 중입니다.')
-        return
-
-    out = ssm_run(status_script())
-    # An empty or truncated SSM reply used to read as "no units, no auth
-    # error" and print a green check for a box that never answered.
-    if out.count(SEP) < 2:
-        tg_send(chat_id, '⚠️ SSM 응답이 없거나 불완전해요. 잠시 후 /status 를 다시 보내세요.')
-        return
-    units_text, _, rest = out.partition(SEP)
-    pane, _, flags = rest.partition(SEP)
-    uptime = format_uptime(launch, datetime.now(timezone.utc))
-    tg_send(
-        chat_id,
-        build_status(state, uptime, parse_units(units_text), auth_problem(strip_ansi(pane), flags)),
-    )
-
-
-def cmd_sessions(chat_id, arg):
-    if not require_running(chat_id):
-        return
-    out = ssm_run(sessions_script())
-    tg_send(chat_id, build_sessions(parse_sessions(out), time.time()))
-
-
 def require_running(chat_id):
-    """Common gate for unit commands. Returns True when SSM can be used."""
+    """Common gate for pocket commands. Returns True when SSM can be used."""
     state, _ = describe()
     if state != 'running':
         tg_send(chat_id, f'⚪ EC2 {state} — /start 로 먼저 켜세요.')
@@ -403,89 +267,97 @@ def require_running(chat_id):
     return True
 
 
-def cmd_new(chat_id, arg):
+def run_pocket(chat_id, verb, *args):
+    """Run one pocket verb on the box. Returns the envelope, or None when the
+    instance is not reachable (the user was already told why)."""
+    if not require_running(chat_id):
+        return None
+    out = ssm_run(pocket_script(verb, *args), timeout=20)
+    return parse_pocket(out)
+
+
+def reply_envelope(chat_id, env, formatter, keyboard=None):
+    if env is None:
+        return
+    if not env.get('ok'):
+        tg_send(chat_id, f"⚠️ {env.get('error') or '알 수 없는 오류'}")
+        return
+    tg_send(chat_id, formatter(env['data']), keyboard)
+
+
+def cmd_status(chat_id, arg):
+    state, launch = describe()
+    if state != 'running':
+        tg_send(chat_id, f'⚪ EC2 {state}\n   /start 로 켜세요.')
+        return
+    if not ssm_ready():
+        tg_send(chat_id, '🔄 부팅 중 — SSM 에이전트 대기 중입니다.')
+        return
+    env = parse_pocket(ssm_run(pocket_script('status'), timeout=20))
+    if not env.get('ok'):
+        tg_send(chat_id, f"⚠️ {env.get('error')}")
+        return
+    uptime = format_uptime(launch, datetime.now(timezone.utc))
+    tg_send(chat_id, format_status(env['data'], uptime))
+
+
+def cmd_projects(chat_id, arg):
+    env = run_pocket(chat_id, 'list')
+    if env is None:
+        return
+    if not env.get('ok'):
+        tg_send(chat_id, f"⚠️ {env.get('error')}")
+        return
+    rows = env['data']['projects']
+    tg_send(chat_id, format_projects(rows), keyboard_for(rows))
+
+
+def cmd_up(chat_id, arg):
     err = validate_name(arg)
     if err:
         tg_send(chat_id, f'⚠️ {err}')
         return
-    if not require_running(chat_id):
-        return
-    # Wait only for `systemctl start` to return. Whether the session is
-    # online is /sessions' job; API Gateway gives us 30s in total.
-    out = ssm_run(new_session_script(arg), timeout=20)
-    # The script ends with `systemctl is-active`, so a healthy run says
-    # active/activating. Anything else is the failure that killed it.
-    if 'activ' not in out:
-        tg_send(
-            chat_id,
-            f'⚠️ {SESSION_PREFIX}{arg} 기동 실패:\n{out.strip()[:800] or "(출력 없음)"}',
-        )
-        return
-    tg_send(
-        chat_id,
-        f'🔄 {SESSION_PREFIX}{arg} 기동 중 ({out.strip() or "?"}).\n'
-        '30초 뒤 앱 Code 탭에서 확인하세요. /sessions 로 상태 조회.',
-    )
+    env = run_pocket(chat_id, 'up', arg)
+    reply_envelope(chat_id, env, lambda d: f"🔄 {d['name']} 기동 ({d['unit']}). 앱 Code 탭에서 확인하세요.")
 
 
-def cmd_kill(chat_id, arg):
+def cmd_down(chat_id, arg):
     err = validate_name(arg)
     if err:
         tg_send(chat_id, f'⚠️ {err}')
         return
-    if not require_running(chat_id):
-        return
-    out = ssm_run(kill_session_script(arg), timeout=20)
-    tg_send(
-        chat_id,
-        f'⏹ {SESSION_PREFIX}{arg} 정지 ({out.strip() or "?"}).\n'
-        '워크트리와 브랜치는 남아 있어요. 지우려면 /rm.',
-    )
+    env = run_pocket(chat_id, 'down', arg)
+    reply_envelope(chat_id, env, lambda d: f"⏹ {d['name']} 정지 ({d['unit']}). 부팅 자동 기동도 해제했어요.")
 
 
-def cmd_rm(chat_id, arg):
+def cmd_trees(chat_id, arg):
     err = validate_name(arg)
     if err:
         tg_send(chat_id, f'⚠️ {err}')
         return
-    if not require_running(chat_id):
-        return
-    out = ssm_run(rm_session_script(arg), timeout=20)
-    if 'DIRTY' in out:
-        tg_send(
-            chat_id,
-            f'⚠️ {SESSION_PREFIX}{arg} 워크트리에 커밋 안 된 변경이 있어 삭제하지 않았어요.\n'
-            '세션은 정지했습니다. 앱에서 커밋·푸시한 뒤 다시 /rm.',
-        )
-    elif 'RM_FAILED' in out:
-        tg_send(chat_id, f'⚠️ {SESSION_PREFIX}{arg} 워크트리 삭제 실패. 세션은 정지했어요. SSM 셸에서 git worktree list 로 확인하세요.')
-    elif 'MISSING' in out:
-        tg_send(chat_id, f'ℹ️ {SESSION_PREFIX}{arg} 워크트리가 없어요. 세션 유닛만 정지했습니다.')
-    elif 'REMOVED' in out:
-        tg_send(chat_id, f'🗑 {SESSION_PREFIX}{arg} 워크트리 삭제. 브랜치는 남아 있어요.')
-    else:
-        tg_send(chat_id, f'⚠️ /rm 결과를 알 수 없어요:\n{out.strip()[:800]}')
+    env = run_pocket(chat_id, 'trees', arg)
+    reply_envelope(chat_id, env, format_trees)
 
 
 HELP = (
-    'pocket-claude v5\n\n'
-    '/start          EC2 켜기 (ops 세션 자동 기동)\n'
+    'pocket-claude v6\n\n'
+    '/start          EC2 켜기\n'
     '/stop           EC2 끄기\n'
-    '/status         EC2·유닛·인증 상태\n'
-    '/sessions       세션 목록 (브랜치·마지막 대화)\n'
-    '/new <name>     워크트리 세션 만들기\n'
-    '/kill <name>    세션 정지 (워크트리 유지)\n'
-    '/rm <name>      세션 정지 + 워크트리 삭제'
+    '/status         EC2·프로젝트·인증 상태\n'
+    '/projects       프로젝트 목록\n'
+    '/up <name>      프로젝트 서버 켜기\n'
+    '/down <name>    프로젝트 서버 끄기\n'
+    '/trees <name>   세션 워크트리 목록'
 )
 
 HANDLERS = {
     '/start': cmd_start,
     '/stop': cmd_stop,
     '/status': cmd_status,
-    '/sessions': cmd_sessions,
-    '/new': cmd_new,
-    '/kill': cmd_kill,
-    '/rm': cmd_rm,
+    '/projects': cmd_projects,
+    '/up': cmd_up,
+    '/down': cmd_down,
+    '/trees': cmd_trees,
 }
 
 
