@@ -17,6 +17,8 @@ WORK=$HOME_DIR/work
 CONFIG_OLD=$HOME_DIR/.config/gamer4
 CONFIG_NEW=$HOME_DIR/.config/pocket-claude
 POCKET=$HOME_DIR/bin/pocket
+TEMPLATE=${TEMPLATE:-/tmp/claude-settings.json}
+SETTINGS=$HOME_DIR/.claude/settings.json
 NAME_RE='^[a-z0-9][a-z0-9-]{0,23}$'
 
 echo "== 1. ~/work =="
@@ -95,7 +97,67 @@ else
   echo "none (no crontab for ubuntu)"
 fi
 
-echo "== 6. trust =="
+echo "== 6. ~/.claude/settings.json =="
+# install.sh drops the SessionStart hook script on the box but nothing
+# registers it, so a migrated box never copies ignored files into an app-made
+# worktree (spike S2) and keeps the stale ~/.config/gamer4 deny rule.
+if [ ! -f "$TEMPLATE" ]; then
+  echo "skip: $TEMPLATE not found -- copy ec2/claude-settings.json to /tmp and re-run" >&2
+else
+  install -d -o ubuntu -g ubuntu -m 0755 "$HOME_DIR/.claude"
+  # Back up once. A second run must not overwrite the v5 original with the
+  # already-merged file.
+  if [ -e "${SETTINGS}.v5.bak" ]; then
+    echo "ok (backup already exists): ${SETTINGS}.v5.bak"
+  elif [ -f "$SETTINGS" ]; then
+    cp -p "$SETTINGS" "${SETTINGS}.v5.bak"
+    chown ubuntu:ubuntu "${SETTINGS}.v5.bak"
+    echo "backed up: ${SETTINGS}.v5.bak"
+  else
+    echo "none to back up (no settings.json yet)"
+  fi
+  # Merge, never replace: keys the box set for itself (model, plugins, other
+  # notification flags) survive. Only the keys the template declares are
+  # overwritten, so dropping one from the template stops forcing it instead
+  # of deleting it here. Re-running rewrites the same values.
+  if python3 - "$TEMPLATE" "$SETTINGS" <<'PY'
+import json, os, sys
+
+template_path, settings_path = sys.argv[1], sys.argv[2]
+with open(template_path) as fh:
+    template = json.load(fh)
+try:
+    with open(settings_path) as fh:
+        merged = json.load(fh)
+except FileNotFoundError:
+    merged = {}
+except ValueError as exc:
+    sys.stderr.write('%s is not valid JSON (%s); fix it and re-run\n'
+                     % (settings_path, exc))
+    sys.exit(3)
+if not isinstance(merged, dict):
+    sys.stderr.write('%s is not a JSON object; fix it and re-run\n' % settings_path)
+    sys.exit(3)
+kept = sorted(k for k in merged if k not in template)
+merged.update(template)
+tmp = settings_path + '.tmp'
+with open(tmp, 'w') as fh:
+    json.dump(merged, fh, indent=2, ensure_ascii=False)
+    fh.write('\n')
+os.replace(tmp, settings_path)
+print('from template: ' + ', '.join(sorted(template)))
+print('kept as-is:    ' + (', '.join(kept) or '(none)'))
+PY
+  then
+    chown ubuntu:ubuntu "$SETTINGS"
+    chmod 644 "$SETTINGS"
+    echo "ok: $SETTINGS"
+  else
+    echo "skip: settings.json not merged (see the message above)" >&2
+  fi
+fi
+
+echo "== 7. trust =="
 if [ "${#names[@]}" -eq 0 ]; then
   echo "no projects passed on the command line"
 else
@@ -105,7 +167,7 @@ else
   done
 fi
 
-echo "== 7. pocket list =="
+echo "== 8. pocket list =="
 sudo -u ubuntu -H "$POCKET" list
 
 # v6 dropped the shared secret file: the unit only reads projects/%i.env.

@@ -233,6 +233,15 @@ ubuntu 사용자(각 프로젝트 세션 포함)는 sudoers(`/etc/sudoers.d/clau
 `sudo bash /tmp/migrate-v6.sh <이름>=<경로> …`를 한 번 더 돌린다(이행, 멱등,
 리포를 옮기지 않는다).
 
+`migrate-v6.sh`의 6단계가 `~/.claude/settings.json`을 갱신한다. `install.sh`는
+`worktree-env-hook.sh`를 `~/bin`에 깔 뿐 settings에 등록하지 않으므로, 이행만 하고
+이 단계를 건너뛰면 `SessionStart` 훅이 붙지 않아 앱이 만든 워크트리 세션에 `.env`가
+복사되지 않고 `~/.config/gamer4` deny 규칙도 남는다. 병합이라 덮어쓰기가 아니다 —
+`settings.json.v5.bak`으로 한 번만 백업하고(두 번째 실행은 백업을 건드리지 않는다)
+템플릿이 가진 키(`permissions`, `hooks`, `remoteControlAtStartup`, 푸시 알림 두 개)만
+바꾼다. `model`·플러그인 등 박스가 스스로 넣은 키는 남는다. `/tmp/claude-settings.json`이
+없으면 그 단계만 건너뛰고 안내를 출력한다.
+
 SSM `--parameters`에 한글이나 따옴표가 섞이면 CLI 파싱이 깨지므로 JSON 파일로
 전달한다. 그리고 **SSM RunShellScript는 bash가 아니라 `/bin/sh`(dash)로 실행된다** —
 프로세스 치환 `<(...)` 같은 bash 전용 문법을 쓰면 `Syntax error: "(" unexpected`로

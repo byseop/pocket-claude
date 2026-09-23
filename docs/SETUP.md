@@ -90,6 +90,14 @@ user settings에 넣어야 `defaultMode`가 먹는다. 프로젝트 `.claude/set
 `auto`/`bypassPermissions`는 무시된다. `SessionStart` 훅 경로(`/home/ubuntu/bin/
 worktree-env-hook.sh`)는 7단계의 `install.sh`가 설치한다.
 
+**v5 박스를 올리는 경우 이 단계를 손으로 하지 않는다.** 위 `cp`는 기존 settings를
+통째로 덮어써 `model`·플러그인 설정까지 날린다. 7단계의 `install.sh` 뒤에
+`migrate-v6.sh`를 돌리면 그 안의 6단계가 대신 한다 — `settings.json.v5.bak`으로
+한 번만 백업한 뒤 `permissions`·`hooks`·`remoteControlAtStartup`·푸시 알림 키만
+템플릿 값으로 바꾸고 나머지 키는 그대로 둔다. `install.sh`는 훅 **스크립트**만 깔고
+등록은 하지 않으므로, 이 병합을 건너뛰면 앱이 만든 워크트리 세션에 `.env`가
+복사되지 않는다.
+
 ## 6. 인스턴스 역할 IAM 정책 (맥에서)
 
 `iam/operator-policy.example.json`을 복사해 `AWS_ACCOUNT_ID`·`STACK_NAME`(배포용 스택
