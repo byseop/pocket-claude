@@ -895,7 +895,7 @@ class TestTrees(PocketCase):
         d = self.setup_trees(['clean'])
         data = self.json_of(self.run_pocket(
             'prune', 'app', '--json',
-            POCKET_CWDS=str(d / '.claude' / 'worktrees' / 'clean')))
+            POCKET_CWDS=str(d / '.claude' / 'worktrees' / 'clean')))['data']
         self.assertEqual(data['removed'], [])
         self.assertIn('사용 중', data['kept'][0]['reason'])
 ```
@@ -915,7 +915,9 @@ def claude_cwds():
     """
     override = os.environ.get('POCKET_CWDS')
     if override is not None:
-        return [p for p in override.split(':') if p]
+        # realpath to match the /proc branch: on macOS a temp dir is reached
+        # through a symlink, so a raw string would never compare equal.
+        return [os.path.realpath(p) for p in override.split(':') if p]
     out = []
     for pid in os.listdir('/proc') if os.path.isdir('/proc') else []:
         if not pid.isdigit():
@@ -946,18 +948,31 @@ def worktrees_of(path):
     return [e for e in entries if os.path.realpath(e.get('path', '')) != os.path.realpath(path)]
 
 
-def tree_state(repo, entry, cwds):
+def unpushed_commits(wt):
+    """True when the worktree holds commits no remote has.
+
+    Fail safe. A failed git call prints nothing and exits non-zero, which
+    looks exactly like "no commits ahead"; treating that as clean would let
+    prune delete real work, and git worktree remove does not protect
+    commits. A kept worktree only costs disk.
+    """
+    rc, out = run(['git', '-C', wt, 'log', '--oneline', '@{u}..HEAD'])
+    if rc == 0:
+        return bool(out.strip())
+    rc, out = run(['git', '-C', wt, 'log', '--oneline', 'origin/HEAD..HEAD'])
+    if rc == 0:
+        return bool(out.strip())
+    return True
+
+
+def tree_state(entry, cwds):
     wt = entry['path']
     _rc, dirty = run(['git', '-C', wt, 'status', '--porcelain'])
-    _rc, unpushed = run(['git', '-C', wt, 'log', '--oneline', '@{u}..HEAD'])
-    if not unpushed.strip():
-        # No upstream configured: compare against the default remote head.
-        _rc, unpushed = run(['git', '-C', wt, 'log', '--oneline', 'origin/HEAD..HEAD'])
     return {
         'path': wt,
         'branch': entry.get('branch', '?'),
         'dirty': bool(dirty.strip()),
-        'unpushed': bool(unpushed.strip()),
+        'unpushed': unpushed_commits(wt),
         'in_use': os.path.realpath(wt) in cwds,
     }
 
@@ -968,7 +983,7 @@ def cmd_trees(args):
     if path is None:
         return envelope('trees', error=f'{name} 프로젝트가 없어요.')
     cwds = claude_cwds()
-    trees = [tree_state(path, e, cwds) for e in worktrees_of(path)]
+    trees = [tree_state(e, cwds) for e in worktrees_of(path)]
     return envelope('trees', {'name': name, 'trees': trees})
 
 
@@ -982,9 +997,11 @@ def cmd_prune(args):
     cwds = claude_cwds()
     removed, kept, would = [], [], []
     _rc, merged_out = run(['git', '-C', path, 'branch', '--merged'])
-    merged = {b.strip().lstrip('* ') for b in merged_out.splitlines()}
+    # git marks the current branch with '*' and one checked out in another
+    # worktree with '+'; every candidate here is the latter.
+    merged = {b.strip().lstrip('*+ ') for b in merged_out.splitlines()}
     for entry in worktrees_of(path):
-        st = tree_state(path, entry, cwds)
+        st = tree_state(entry, cwds)
         reason = ('미커밋 변경이 있어요' if st['dirty'] else
                   '미푸시 커밋이 있어요' if st['unpushed'] else
                   '세션이 사용 중이에요' if st['in_use'] else None)
