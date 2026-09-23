@@ -83,8 +83,11 @@ sudo -u ubuntu tmux -L rc-<프로젝트> capture-pane -t rc-<프로젝트> -p | 
 journalctl -u claude-rc@<프로젝트> -n 30
 ```
 
-화면에 `Enable Remote Control?`이 떠 있으면 계정 단위 1회 수락이 안 된 것이다 —
-`docs/SETUP.md` 9단계.
+화면에 `Enable Remote Control?`이 떠 있으면 이 프로젝트 폴더에서 아직 수락이 안 된
+것이다 — `docs/SETUP.md` 9단계를 그 폴더(`cd ~/work/<프로젝트>`)에서 한 번 한다.
+계정 단위로 한 번이면 될 것으로 보이지만(다른 프로젝트에서 이미 수락했어도 여기서
+또 뜰 수 있는지는 두 번째 프로젝트로 실제 확인한 적이 없다), 화면에 뜨면 그냥
+그 자리에서 수락하는 쪽이 빠르다.
 
 ### 함정 A — 만료된 `.credentials.json`이 토큰을 가린다
 
@@ -321,9 +324,12 @@ EC2 쪽은 되돌릴 필요가 없다. systemd 유닛은 이전 버전과 공존
 
 ## 알려진 제약
 
-- **대화형 1회 작업이 있다** — `claude auth login`, "Enable Remote Control?" 계정 단위
-  수락은 SSM 셸에서 사람이 해야 한다. 봇이 대신 못 한다. 워크스페이스 신뢰는
-  `pocket trust <p>`가 자동화하지만, 실패하면(경쟁 상태 등) 역시 SSM 셸에서 직접 한다
+- **대화형 1회 작업이 있다** — `claude auth login`, "Enable Remote Control?" 수락은
+  SSM 셸에서 사람이 해야 한다. 봇이 대신 못 한다. "Enable Remote Control?"이 계정
+  단위로 한 번이면 되는지는 프로젝트 하나로만 실측했고 두 번째 프로젝트로 확인한
+  적은 없다 — 안 뜨면 다행이고, 뜨면 그 프로젝트 폴더에서 한 번 더 수락한다
+  (`docs/SETUP.md` 9단계). 워크스페이스 신뢰는 `pocket trust <p>`가 자동화하지만,
+  실패하면(경쟁 상태 등) 역시 SSM 셸에서 직접 한다
 - **`claude doctor`는 TTY 없이 실행하면 블록된다** — SSM에서 호출하지 않는다.
   `/status`는 `.env` 토큰 잔존·`.credentials.json` 존재·화면 401 스캔으로 대신한다
 - **동시 세션 수 = 디스크·메모리** — 프로젝트당 `1 + POCKET_SESSIONS`(기본값 2라

@@ -54,7 +54,10 @@ redeploy — only a link and `pocket trust <p>` (`docs/SETUP.md`).
 
 Each project's server runs with `--spawn worktree`: a "new session" in the
 app creates a worktree at `<repo>/.claude/worktrees/<session-id>` on branch
-`worktree-<session-id>`, locked while the session is live. The server also
+`worktree-<session-id>`. Claude Code locks the worktree while it uses it;
+whether that lock clears itself when the session ends wasn't measured, so
+`pocket prune` treats a locked worktree as kept regardless of its age —
+a stale lock costs disk, never data. The server also
 pre-creates one session in the main checkout for repo-wide work, so a
 project's effective capacity is `1 + POCKET_SESSIONS` (default 2).
 Worktrees accumulate; on the box, `pocket prune <p>` removes only the ones
