@@ -207,9 +207,13 @@ def tg_api(method, payload):
 
 
 def tg_send(chat_id, text, keyboard=None):
-    for i in range(0, max(len(text), 1), TG_MAX):
-        payload = {'chat_id': chat_id, 'text': text[i:i + TG_MAX] or ' '}
-        if keyboard and i == 0:
+    # A long reply arrives on the phone as stacked messages, and Telegram
+    # scrolls to the newest one — so the keyboard belongs on the last chunk,
+    # not the first, or it ends up off-screen.
+    chunks = [text[i:i + TG_MAX] or ' ' for i in range(0, max(len(text), 1), TG_MAX)]
+    for i, chunk in enumerate(chunks):
+        payload = {'chat_id': chat_id, 'text': chunk}
+        if keyboard and i == len(chunks) - 1:
             payload['reply_markup'] = keyboard
         tg_api('sendMessage', payload)
 
@@ -385,6 +389,12 @@ def cmd_trees(chat_id, arg):
 
 CALLBACK_VERBS = {'up': cmd_up, 'down': cmd_down, 'trees': cmd_trees}
 
+# Seconds of the API Gateway 30s window we allow the whole callback to use.
+# The command's own SSM round trip already spends up to ~20s; a second SSM
+# call to refresh the keyboard must not be allowed to push the total past
+# the gateway's limit, or Telegram redelivers the button press.
+CALLBACK_BUDGET = 25
+
 
 def handle_callback(cb):
     """Handle an inline-button press.
@@ -394,6 +404,7 @@ def handle_callback(cb):
     message path checks ALLOWED_CHAT_ID. Any unknown verb, malformed
     payload, or name that fails validate_name is ignored silently.
     """
+    started = time.monotonic()
     tg_answer_callback(cb.get('id'))
     chat_id = str(((cb.get('message') or {}).get('chat') or {}).get('id', ''))
     from_id = str((cb.get('from') or {}).get('id', ''))
@@ -407,9 +418,14 @@ def handle_callback(cb):
     handler(chat_id, name)
     message_id = (cb.get('message') or {}).get('message_id')
     if message_id and verb in ('up', 'down'):
-        env = parse_pocket(ssm_run(pocket_script('list'), timeout=20))
-        if env.get('ok'):
-            tg_edit_markup(chat_id, message_id, keyboard_for(env['data']['projects']))
+        # Refresh the list markup only if the command left us time. A second
+        # SSM round trip can otherwise push the invocation past the gateway's
+        # 30s limit, and Telegram then redelivers the press.
+        left = CALLBACK_BUDGET - (time.monotonic() - started)
+        if left >= 5:
+            env = parse_pocket(ssm_run(pocket_script('list'), timeout=int(min(left, 8))))
+            if env.get('ok'):
+                tg_edit_markup(chat_id, message_id, keyboard_for(env['data']['projects']))
 
 
 HELP = (
@@ -444,13 +460,20 @@ def lambda_handler(event, context):
         body = json.loads(event.get('body') or '{}')
         callback = body.get('callback_query')
         if callback:
-            # Never let a button press raise: the callback was already
-            # answered inside handle_callback, so swallow anything else
-            # here and still return 200.
+            # A failing button press must be reported the same way a failing
+            # command is: the callback was already answered inside
+            # handle_callback (spinner cleared), so a swallowed exception
+            # here would leave the user with total silence — indistinguishable
+            # from a dead bot.
             try:
                 handle_callback(callback)
-            except Exception:  # noqa: BLE001 - deliberate catch-all
-                pass
+            except Exception as exc:  # noqa: BLE001 - deliberate catch-all
+                cb_chat_id = str(((callback.get('message') or {}).get('chat') or {}).get('id', ''))
+                try:
+                    tg_send(cb_chat_id, format_error('버튼', exc))
+                except Exception:  # noqa: BLE001 - Telegram itself is down
+                    pass
+                return {'statusCode': 200, 'body': 'error reported'}
             return {'statusCode': 200, 'body': 'ok'}
         message = body.get('message') or body.get('edited_message') or {}
         chat_id = str((message.get('chat') or {}).get('id', ''))

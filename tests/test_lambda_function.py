@@ -393,6 +393,25 @@ class TestHandlerRouting(unittest.TestCase):
         self.assertNotIn('gamer4', self.sent[0][1])
 
 
+class TestTgSend(unittest.TestCase):
+    """tg_send itself, unmocked — TestHandlerRouting.setUp replaces tg_send
+    wholesale, so this exercises the real chunking/keyboard-placement logic
+    against a stubbed tg_api instead."""
+
+    def test_send_attaches_keyboard_to_last_chunk(self):
+        payloads = []
+        orig_api = lf.tg_api
+        lf.tg_api = lambda method, payload: payloads.append(payload)
+        try:
+            text = 'x' * (lf.TG_MAX + 10)
+            lf.tg_send('111', text, keyboard={'inline_keyboard': []})
+        finally:
+            lf.tg_api = orig_api
+        self.assertEqual(len(payloads), 2)
+        self.assertNotIn('reply_markup', payloads[0])
+        self.assertIn('reply_markup', payloads[-1])
+
+
 class TestButtons(TestHandlerRouting):
     """Inline-button keyboard building and the callback_query handler.
 
@@ -428,6 +447,42 @@ class TestButtons(TestHandlerRouting):
     def test_callback_with_bad_payload_is_ignored(self):
         lf.lambda_handler(callback_event('up:Bad Name'), None)
         self.assertEqual(self.ran, [])
+
+    def test_callback_skips_refresh_when_budget_spent(self):
+        lf.ssm_run = lambda script, timeout=25: self.ran.append(script) or ENVELOPE_OK
+        orig_budget = lf.CALLBACK_BUDGET
+        lf.CALLBACK_BUDGET = 0
+        try:
+            lf.lambda_handler(callback_event('up:app'), None)
+        finally:
+            lf.CALLBACK_BUDGET = orig_budget
+        self.assertEqual(len(self.ran), 1)
+
+    def test_callback_refreshes_markup_when_time_allows(self):
+        calls = []
+        orig_edit = lf.tg_edit_markup
+        lf.tg_edit_markup = lambda chat_id, message_id, keyboard: calls.append(keyboard)
+        lf.ssm_run = lambda script, timeout=25: self.ran.append(script) or ENVELOPE_OK
+        try:
+            lf.lambda_handler(callback_event('up:app'), None)
+        finally:
+            lf.tg_edit_markup = orig_edit
+        self.assertEqual(len(self.ran), 2)
+        self.assertEqual(len(calls), 1)
+
+    def test_callback_failure_is_reported(self):
+        def boom(chat_id, name):
+            raise RuntimeError('버튼 처리 실패 테스트')
+
+        orig_handler = lf.CALLBACK_VERBS['up']
+        lf.CALLBACK_VERBS['up'] = boom
+        try:
+            res = lf.lambda_handler(callback_event('up:app'), None)
+        finally:
+            lf.CALLBACK_VERBS['up'] = orig_handler
+        self.assertEqual(res['statusCode'], 200)
+        self.assertTrue(self.sent)
+        self.assertIn('버튼 처리 실패 테스트', self.sent[-1][1])
 
 
 if __name__ == '__main__':
