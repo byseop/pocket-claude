@@ -13,7 +13,7 @@
       "Resource": "*"
     },
     {
-      "Sid": "CloudFormationDeploySyncStack",
+      "Sid": "CloudFormationDeployStack",
       "Effect": "Allow",
       "Action": [
         "cloudformation:CreateChangeSet",
@@ -21,12 +21,12 @@
         "cloudformation:DeleteChangeSet"
       ],
       "Resource": [
-        "arn:aws:cloudformation:ap-northeast-2:AWS_ACCOUNT_ID:stack/gamer4-sync/*",
+        "arn:aws:cloudformation:ap-northeast-2:AWS_ACCOUNT_ID:stack/STACK_NAME/*",
         "arn:aws:cloudformation:ap-northeast-2:aws:transform/Serverless-2016-10-31"
       ]
     },
     {
-      "Sid": "LambdaSyncFunctions",
+      "Sid": "LambdaProjectFunctions",
       "Effect": "Allow",
       "Action": [
         "lambda:Get*",
@@ -34,7 +34,18 @@
         "lambda:UpdateFunctionCode",
         "lambda:UpdateFunctionConfiguration"
       ],
-      "Resource": "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:gamer4-sync-*"
+      "Resource": "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:FUNCTION_PREFIX-*"
+    },
+    {
+      "Sid": "LambdaExtraFunctions",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:Get*",
+        "lambda:List*",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration"
+      ],
+      "Resource": "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:EXTRA_FUNCTION_NAME"
     },
     {
       "Sid": "LogsReadOnly",

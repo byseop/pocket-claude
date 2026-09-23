@@ -8,6 +8,7 @@ install -d -o ubuntu -g ubuntu -m 0755 /home/ubuntu/bin /home/ubuntu/work
 install -d -o ubuntu -g ubuntu -m 0700 /home/ubuntu/.config/pocket-claude/projects
 install -o ubuntu -g ubuntu -m 0755 /tmp/claude-rc-wrap.sh /home/ubuntu/bin/claude-rc-wrap.sh
 install -o ubuntu -g ubuntu -m 0755 /tmp/pocket /home/ubuntu/bin/pocket
+install -o ubuntu -g ubuntu -m 0755 /tmp/worktree-env-hook.sh /home/ubuntu/bin/worktree-env-hook.sh
 install -o root -g root -m 0644 /tmp/claude-rc@.service /etc/systemd/system/claude-rc@.service
 install -o root -g root -m 0644 /tmp/claude-rc.slice /etc/systemd/system/claude-rc.slice
 

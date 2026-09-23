@@ -28,7 +28,7 @@ state_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
 STATE=${STATE:-/home/ubuntu/.claude-idle-state}
 PROJECTS_DIR=${PROJECTS_DIR:-/home/ubuntu/.claude/projects}
 JOBS_DIR=${JOBS_DIR:-/home/ubuntu/.claude/jobs}
-SECRETS_FILE=${SECRETS_FILE:-/home/ubuntu/.config/gamer4/telegram.env}
+SECRETS_FILE=${SECRETS_FILE:-/home/ubuntu/.config/pocket-claude/telegram.env}
 IDLE_MINUTES=${IDLE_MINUTES:-60}
 # A background job counts as working only if it is both non-terminal and
 # recently touched. Without the freshness bound, a session stuck in a
