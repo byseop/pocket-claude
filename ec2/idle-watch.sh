@@ -28,7 +28,7 @@ state_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
 STATE=${STATE:-/home/ubuntu/.claude-idle-state}
 PROJECTS_DIR=${PROJECTS_DIR:-/home/ubuntu/.claude/projects}
 JOBS_DIR=${JOBS_DIR:-/home/ubuntu/.claude/jobs}
-SECRETS_FILE=${SECRETS_FILE:-/home/ubuntu/.config/gamer4/telegram.env}
+SECRETS_FILE=${SECRETS_FILE:-/home/ubuntu/.config/pocket-claude/telegram.env}
 IDLE_MINUTES=${IDLE_MINUTES:-60}
 # A background job counts as working only if it is both non-terminal and
 # recently touched. Without the freshness bound, a session stuck in a
@@ -128,9 +128,10 @@ fi
 logger -t idle-watch "idle ${IDLE} min; stopping instance"
 
 # Notify through the boot-manager bot token kept in telegram.env, so the
-# watcher needs no credentials of its own. That file is deliberately not
-# secrets.env: claude-rc@.service loads secrets.env into every Claude
-# session's environment, and this token has no business being there.
+# watcher needs no credentials of its own. That file is deliberately not a
+# project env file: claude-rc@<project>.service loads projects/<project>.env
+# into that Claude session's environment, and this token has no business
+# being there.
 if [ -f "$SECRETS_FILE" ]; then
   TELEGRAM_TOKEN=''; TELEGRAM_CHAT_ID=''
   . "$SECRETS_FILE"

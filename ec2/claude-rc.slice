@@ -1,0 +1,9 @@
+[Unit]
+Description=Claude Code Remote Control servers
+
+[Slice]
+# Aggregate cap for every claude-rc@ instance. MemoryHigh throttles first so a
+# build slows down instead of dying; MemoryMax is the hard stop that protects
+# the SSM agent, which is the only remote recovery path.
+MemoryHigh=3G
+MemoryMax=3.5G

@@ -1,4 +1,5 @@
 {
+  "_comment": "Inline policy example for the instance role. Copy, replace AWS_ACCOUNT_ID, STACK_NAME, FUNCTION_PREFIX and EXTRA_FUNCTION_NAME with your own, drop the statements you do not need, and attach it with: aws iam put-role-policy --role-name <instance-role> --policy-name <name> --policy-document file://<this file>. Grant only what a session on the box actually calls; anything it does not use belongs on your own machine.",
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -13,7 +14,7 @@
       "Resource": "*"
     },
     {
-      "Sid": "CloudFormationDeploySyncStack",
+      "Sid": "CloudFormationDeployStack",
       "Effect": "Allow",
       "Action": [
         "cloudformation:CreateChangeSet",
@@ -21,7 +22,7 @@
         "cloudformation:DeleteChangeSet"
       ],
       "Resource": [
-        "arn:aws:cloudformation:ap-northeast-2:AWS_ACCOUNT_ID:stack/gamer4-sync/*",
+        "arn:aws:cloudformation:ap-northeast-2:AWS_ACCOUNT_ID:stack/STACK_NAME/*",
         "arn:aws:cloudformation:ap-northeast-2:aws:transform/Serverless-2016-10-31"
       ]
     },
@@ -42,19 +43,18 @@
         "lambda:List*"
       ],
       "Resource": [
-        "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:gamer4-sync-*",
-        "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:gamer4-notify-alerts",
-        "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:ec2-boot-manager"
+        "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:FUNCTION_PREFIX-*",
+        "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:EXTRA_FUNCTION_NAME"
       ]
     },
     {
-      "Sid": "LambdaDeploySyncFunctions",
+      "Sid": "LambdaDeployProjectFunctions",
       "Effect": "Allow",
       "Action": [
         "lambda:UpdateFunctionCode",
         "lambda:UpdateFunctionConfiguration"
       ],
-      "Resource": "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:gamer4-sync-*"
+      "Resource": "arn:aws:lambda:ap-northeast-2:AWS_ACCOUNT_ID:function:FUNCTION_PREFIX-*"
     },
     {
       "Sid": "LogsReadOnly",
